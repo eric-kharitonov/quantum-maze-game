@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Quantum Maze</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #07070d;
+    color: #ddd;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    min-height: 100vh;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 20px 40px;
+    box-sizing: border-box;
+  }
+  h1 {
+    color: #4dffdd;
+    font-weight: 300;
+    letter-spacing: 0.35em;
+    font-size: 22px;
+    margin: 0 0 22px;
+    text-shadow: 0 0 12px rgba(77, 255, 221, 0.3);
+  }
+  .layout {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+  }
+  .panel {
+    background: #0a0a14;
+    padding: 16px;
+    border-radius: 10px;
+    border: 1px solid #1a1a2e;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.5) inset;
+  }
+  .label {
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 9px;
+    margin-bottom: 10px;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+  }
+  #stats {
+    color: #4dffdd;
+    margin-top: 16px;
+    font-size: 12px;
+    line-height: 1.9;
+    border-top: 1px solid #1a1a2e;
+    padding-top: 12px;
+    min-width: 180px;
+  }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .row .k { color: #777; }
+  #status {
+    margin-top: 22px;
+    min-height: 22px;
+    color: #ffb84d;
+    font-size: 13px;
+    text-align: center;
+    text-shadow: 0 0 6px rgba(255, 184, 77, 0.4);
+  }
+  #restart {
+    margin-top: 14px;
+    width: 100%;
+    background: #0e0e1a;
+    color: #4dffdd;
+    border: 1px solid #2a2a44;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  #restart:hover {
+    background: #161628;
+    border-color: #4dffdd;
+  }
+  #restart:active { background: #0a0a14; }
+  #instructions {
+    color: #555;
+    font-size: 11px;
+    margin-top: 18px;
+    max-width: 720px;
+    text-align: center;
+    line-height: 1.7;
+  }
+  #instructions .key {
+    background: #1a1a2e;
+    color: #aaa;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid #2a2a44;
+    font-size: 10px;
+  }
+  .legend {
+    display: flex;
+    gap: 14px;
+    margin-top: 14px;
+    font-size: 10px;
+    color: #888;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch {
+    width: 10px;
+    height: 10px;
+    display: inline-block;
+    border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+<h1>QUANTUM&nbsp;MAZE</h1>
+<div class="layout">
+  <div class="panel">
+    <div class="label">Main view</div>
+    <canvas id="main" width="480" height="480"></canvas>
+  </div>
+  <div class="panel">
+    <div class="label">Minimap &middot; collapsed only</div>
+    <canvas id="mini" width="180" height="180"></canvas>
+    <div id="stats">
+      <div class="row"><span class="k">Steps</span><span id="s-steps">0</span></div>
+      <div class="row"><span class="k">Walls collapsed</span><span id="s-walls">0</span></div>
+      <div class="row"><span class="k">Bell flashes</span><span id="s-bell">0</span></div>
+    </div>
+    <button id="restart" type="button">Restart</button>
+  </div>
+</div>
+<div id="status"></div>
+<div class="legend">
+  <span><span class="swatch" style="background:#ffb84d; box-shadow:0 0 6px #ffb84d"></span> uncollapsed</span>
+  <span><span class="swatch" style="background:#7a7a9a"></span> solid</span>
+  <span><span class="swatch" style="background:#2a2a3a"></span> open / floor</span>
+  <span><span class="swatch" style="background:#b366ff; box-shadow:0 0 6px #b366ff"></span> Bell partner flash</span>
+  <span><span class="swatch" style="background:#4dffdd; box-shadow:0 0 6px #4dffdd"></span> you</span>
+</div>
+<div id="instructions">
+  <span class="key">&uarr;</span> forward &middot; <span class="key">&darr;</span> back &middot; <span class="key">&larr;</span> turn left &middot; <span class="key">&rarr;</span> turn right.
+  Walls in superposition collapse when you observe them. Some walls are secretly entangled &mdash; observing one collapses its distant partner, which flashes on the minimap. Reach the right edge to escape.
+</div>
+
+<script src="quantum.js"></script>
+<script src="maze.js"></script>
+</body>
+</html>
