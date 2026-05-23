@@ -171,7 +171,7 @@ function isValidCandidate(cell, side) {
   if (!w) return false;
   if (w.state !== 'SUPERPOSED') return false;
   // Exit candidate: right border at col 14
-  if (w.isExit) return cell.c === GRID - 1 && side === 'E';
+  if (w.isExit) return exitOpenedRow === null && cell.c === GRID - 1 && side === 'E';
   if (w.isBorder) return false;
   const t = sideToCoord(cell, side);
   if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) return false;
