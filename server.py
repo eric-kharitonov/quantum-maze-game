@@ -100,6 +100,19 @@ def collapse():
         b = int(bitstring[0])
         return jsonify({"a": a, "b": b})
 
+    elif circuit_type == "nonzero":
+        candidates = data.get("candidates", [])
+        k = len(candidates)
+        if k == 0:
+            return jsonify({"error": "no candidates provided"}), 400
+        try:
+            bitstring = sample_nonzero(k)
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 500
+        # bitstring is big-endian: position -(i+1) corresponds to qubit i.
+        outcomes = [int(bitstring[-(i + 1)]) for i in range(k)]
+        return jsonify({"outcomes": outcomes})
+
     else:
         return jsonify({"error": f"unknown type: {circuit_type!r}"}), 400
 
