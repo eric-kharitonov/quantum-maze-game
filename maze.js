@@ -218,10 +218,8 @@ async function processBell(cell) {
       flashes.push({ kind: 'bell', wallId: w.bellPartner, t: 0, lifetime: 1400 });
       stats.bellFlashes++;
     }
-    // 0.2: a Bell measurement can close a remote wall to SOLID and orphan a
-    // region of unvisited cells. Re-check reachability after each collapse
-    // and force-open the minimum set of walls to reconnect any orphans.
-    repairOrphans();
+    // v0.3: no classical override. Orphans (if any) are detected in
+    // enterCell via checkExitSealed and the game ends honestly.
   }
 }
 
@@ -484,28 +482,26 @@ function applyLoopAndCyclePrevention(cell) {
 async function enterCell(cell) {
   inputLocked = true;
   cells[cell.r][cell.c].visited = true;
-  stack.push({ r: cell.r, c: cell.c });
   stats.steps++;
 
-  // Walls between this cell and adjacent already-visited cells (other than the
-  // entry wall, which is already OPEN) become SOLID — those connections would
-  // form loops, so they're permanently closed.
-  for (const side of SIDES) {
-    const id = cellWalls(cell.r, cell.c)[side];
-    if (!walls[id] || walls[id].state !== 'SUPERPOSED') continue;
-    const t = sideToCoord(cell, side);
-    if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-    if (cells[t.r][t.c].visited) {
-      walls[id].state = 'SOLID';
-      stats.wallsCollapsed++;
-    }
+  // v0.3 pipeline:
+  // 1. Bell measurements on any ENTANGLED walls adjacent to this cell.
+  //    Bell can produce OPEN outcomes that bypass cycle prevention --
+  //    these are "Bell wormholes," accepted per the spec.
+  await processBell(cell);
+
+  // 2. Loop prevention + cycle prevention. Returns the surviving SUPERPOSED
+  //    candidate sides to feed into the non-zero circuit.
+  const candidates = applyLoopAndCyclePrevention(cell);
+
+  // 3. Single non-zero circuit over all candidates. Guarantees >=1 OPEN
+  //    if k >= 1; if k = 0 this is a structural dead end and the player
+  //    walks back through the entry wall manually.
+  if (candidates.length > 0) {
+    await processNonzeroCircuit(cell, candidates);
   }
 
-  await processBell(cell);
-  await processWState(cell);
-
-  // 0.2: pre-determined exit. When the player reaches the chosen exit cell,
-  // the right-border wall opens deterministically.
+  // 4. If this is the pre-picked exit cell, open the exit wall deterministically.
   if (cell.r === exitRow && cell.c === GRID - 1) {
     const id = vwallId(exitRow, GRID - 1);
     if (walls[id].state !== 'OPEN') {
@@ -515,8 +511,11 @@ async function enterCell(cell) {
     }
   }
 
-  if (validCandidates(cell).length === 0 && !canMoveFromHere(cell)) {
-    await tryBacktrack();
+  // 5. Orphan check. If the exit is no longer reachable, end the game
+  //    honestly -- no classical override.
+  if (checkExitSealed()) {
+    gameOver = true;
+    setStatus('★ Quantum entanglement sealed this maze. Restart for a new measurement.');
   }
 
   inputLocked = false;
