@@ -225,6 +225,31 @@ async function processBell(cell) {
   }
 }
 
+// v0.3: after every cell entry, verify the exit cell is still reachable
+// from the player's current position via non-SOLID walls. Returns true if
+// the maze has been sealed off and the player cannot reach the exit.
+function checkExitSealed() {
+  if (exitRow === null) return false;
+  const target = `${exitRow},${GRID - 1}`;
+  const reachable = new Set([`${player.r},${player.c}`]);
+  const q = [{ r: player.r, c: player.c }];
+  while (q.length) {
+    const cur = q.shift();
+    if (`${cur.r},${cur.c}` === target) return false;
+    for (const side of SIDES) {
+      const id = cellWalls(cur.r, cur.c)[side];
+      if (!walls[id] || walls[id].state === 'SOLID') continue;
+      const t = sideToCoord(cur, side);
+      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
+      const key = `${t.r},${t.c}`;
+      if (reachable.has(key)) continue;
+      reachable.add(key);
+      q.push(t);
+    }
+  }
+  return true;  // exit not in reachable set
+}
+
 // 0.2: classical post-Bell connectivity repair. From (0,0), BFS through any
 // non-SOLID wall (OPEN, SUPERPOSED, ENTANGLED — all are walls that *could*
 // still become passages). Any cell unreachable that way is orphaned: every
