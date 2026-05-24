@@ -361,6 +361,64 @@ async function processWState(cell) {
   return chosenSide;
 }
 
+// v0.3: classical pre-measurement filter. For each SUPERPOSED wall at `cell`:
+//   - if neighbor is visited -> SOLID (loop prevention)
+//   - if neighbor is unvisited but already reachable from {visited} via
+//     OPEN walls -> SOLID (cycle prevention)
+// Returns the array of remaining-SUPERPOSED candidate sides for the
+// non-zero circuit to measure.
+function applyLoopAndCyclePrevention(cell) {
+  // Step 1: BFS from visited set through OPEN walls -> reachable set.
+  const reachable = new Set();
+  const seedQ = [];
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      if (cells[r][c].visited) {
+        reachable.add(`${r},${c}`);
+        seedQ.push({ r, c });
+      }
+    }
+  }
+  while (seedQ.length) {
+    const cur = seedQ.shift();
+    for (const side of SIDES) {
+      const id = cellWalls(cur.r, cur.c)[side];
+      if (!walls[id] || walls[id].state !== 'OPEN') continue;
+      const t = sideToCoord(cur, side);
+      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
+      const key = `${t.r},${t.c}`;
+      if (reachable.has(key)) continue;
+      reachable.add(key);
+      seedQ.push(t);
+    }
+  }
+
+  // Step 2: for each side of `cell`, decide.
+  const candidates = [];
+  for (const side of SIDES) {
+    const id = cellWalls(cell.r, cell.c)[side];
+    const w = walls[id];
+    if (!w) continue;
+    if (w.state !== 'SUPERPOSED') continue;
+    if (w.isExit) continue;     // exit wall never enters the circuit
+    if (w.isBorder) continue;   // border walls aren't candidates
+    const t = sideToCoord(cell, side);
+    if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
+    if (cells[t.r][t.c].visited) {
+      walls[id].state = 'SOLID';  // loop prevention
+      stats.wallsCollapsed++;
+      continue;
+    }
+    if (reachable.has(`${t.r},${t.c}`)) {
+      walls[id].state = 'SOLID';  // cycle prevention
+      stats.wallsCollapsed++;
+      continue;
+    }
+    candidates.push(side);
+  }
+  return candidates;
+}
+
 async function enterCell(cell) {
   inputLocked = true;
   cells[cell.r][cell.c].visited = true;
