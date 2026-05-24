@@ -64,7 +64,6 @@ const cells = Array.from({ length: GRID }, () =>
   Array.from({ length: GRID }, () => ({ visited: false }))
 );
 const walls = {};
-const stack = [];
 const flashes = [];           // { kind, wallId|null, r?, c?, t, lifetime }
 const player = { r: 0, c: 0, facing: 'E' };
 const stats = { steps: 0, wallsCollapsed: 0, bellFlashes: 0 };
@@ -164,26 +163,6 @@ function assignBellPairs() {
 
 // ===== Algorithm =====
 
-// A side `s` is a valid W-state candidate at `cell` iff its wall is SUPERPOSED
-// and the neighbor on the other side is unvisited. 0.2: exit walls are excluded
-// entirely — the exit row is pre-determined at game start and opens on arrival,
-// not via W-state carving.
-function isValidCandidate(cell, side) {
-  const id = cellWalls(cell.r, cell.c)[side];
-  const w = walls[id];
-  if (!w) return false;
-  if (w.state !== 'SUPERPOSED') return false;
-  if (w.isExit) return false;
-  if (w.isBorder) return false;
-  const t = sideToCoord(cell, side);
-  if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) return false;
-  return !cells[t.r][t.c].visited;
-}
-
-function validCandidates(cell) {
-  return SIDES.filter(s => isValidCandidate(cell, s));
-}
-
 async function processBell(cell) {
   for (const side of SIDES) {
     const id = cellWalls(cell.r, cell.c)[side];
@@ -248,111 +227,6 @@ function checkExitSealed() {
   return true;  // exit not in reachable set
 }
 
-// 0.2: classical post-Bell connectivity repair. From (0,0), BFS through any
-// non-SOLID wall (OPEN, SUPERPOSED, ENTANGLED — all are walls that *could*
-// still become passages). Any cell unreachable that way is orphaned: every
-// path to it is blocked by SOLID walls. For each orphan, run a Dijkstra
-// (SOLID cost 1, non-SOLID cost 0) from the reachable set, and force open
-// the minimum set of SOLID walls to reconnect it.
-function repairOrphans() {
-  const reachable = new Set(['0,0']);
-  const q = [{ r: 0, c: 0 }];
-  while (q.length) {
-    const cur = q.shift();
-    for (const side of SIDES) {
-      const id = cellWalls(cur.r, cur.c)[side];
-      if (!walls[id] || walls[id].state === 'SOLID') continue;
-      const t = sideToCoord(cur, side);
-      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-      const key = `${t.r},${t.c}`;
-      if (reachable.has(key)) continue;
-      reachable.add(key);
-      q.push(t);
-    }
-  }
-  if (reachable.size === GRID * GRID) return;
-
-  // Find orphans. For each, Dijkstra from reachable set; force open the
-  // SOLID walls along the cheapest path. The orphans then join `reachable`
-  // and we move on.
-  let forced = 0;
-  for (let r = 0; r < GRID; r++) {
-    for (let c = 0; c < GRID; c++) {
-      const key = `${r},${c}`;
-      if (reachable.has(key)) continue;
-      const path = shortestSolidPath(reachable, { r, c });
-      for (const wallId of path) {
-        if (walls[wallId].state === 'SOLID') {
-          walls[wallId].state = 'OPEN';
-          flashes.push({ kind: 'repair', wallId, t: 0, lifetime: 1800 });
-          forced++;
-        }
-      }
-      // Mark the orphan cell (and any newly-connected neighbors) reachable.
-      const nq = [{ r, c }];
-      reachable.add(key);
-      while (nq.length) {
-        const cur = nq.shift();
-        for (const side of SIDES) {
-          const id = cellWalls(cur.r, cur.c)[side];
-          if (!walls[id] || walls[id].state === 'SOLID') continue;
-          const t = sideToCoord(cur, side);
-          if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-          const k2 = `${t.r},${t.c}`;
-          if (reachable.has(k2)) continue;
-          reachable.add(k2);
-          nq.push(t);
-        }
-      }
-    }
-  }
-  if (forced > 0) {
-    console.log(`[Q] orphan repair: forced ${forced} wall(s) open`);
-  }
-}
-
-// Dijkstra from any cell in `reachable` to target `to`. Edge costs: 0 if the
-// wall is non-SOLID (already passable or will be), 1 if SOLID (must force).
-// Returns the list of wall IDs along the cheapest path.
-function shortestSolidPath(reachable, to) {
-  const dist = new Map();
-  const parent = new Map();
-  const queue = [];
-  for (const k of reachable) {
-    dist.set(k, 0);
-    const [r, c] = k.split(',').map(Number);
-    queue.push([0, r, c]);
-  }
-  while (queue.length) {
-    queue.sort((a, b) => a[0] - b[0]);
-    const [d, r, c] = queue.shift();
-    if (d !== dist.get(`${r},${c}`)) continue;
-    if (r === to.r && c === to.c) break;
-    for (const side of SIDES) {
-      const id = cellWalls(r, c)[side];
-      if (!walls[id] || walls[id].isBorder || walls[id].isExit) continue;
-      const t = sideToCoord({ r, c }, side);
-      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-      const cost = walls[id].state === 'SOLID' ? 1 : 0;
-      const nd = d + cost;
-      const key = `${t.r},${t.c}`;
-      if (!dist.has(key) || dist.get(key) > nd) {
-        dist.set(key, nd);
-        parent.set(key, { from: { r, c }, wallId: id });
-        queue.push([nd, t.r, t.c]);
-      }
-    }
-  }
-  const wallIds = [];
-  let cur = { r: to.r, c: to.c };
-  while (parent.has(`${cur.r},${cur.c}`)) {
-    const p = parent.get(`${cur.r},${cur.c}`);
-    wallIds.push(p.wallId);
-    cur = p.from;
-  }
-  return wallIds;
-}
-
 // v0.3: fire one non-zero superposition circuit over `candidates` (an array
 // of sides like ['N','E','S']). Mutates wall states accordingly:
 //   - each bit_i = 1 -> wall_i -> OPEN
@@ -388,37 +262,6 @@ async function processNonzeroCircuit(cell, candidates) {
   }
   console.log(`[Q] cell (${cell.r},${cell.c}) k=${candidates.length} -> outcomes [${outcomes.join(',')}], opened: ${opened.join(',') || '(none - bug)'}`);
   return opened;
-}
-
-async function processWState(cell) {
-  const cands = validCandidates(cell);
-  if (cands.length === 0) return null;
-
-  const candIds = cands.map(s => cellWalls(cell.r, cell.c)[s]);
-  const candCoords = cands.map(s => {
-    const t = sideToCoord(cell, s);
-    return [t.r, t.c];
-  });
-  for (const id of candIds) walls[id].pending = true;
-  render();
-
-  let chosen;
-  try {
-    chosen = await Quantum.wState([cell.r, cell.c], candCoords);
-  } catch (e) {
-    console.error('W-state call failed', e);
-    for (const id of candIds) walls[id].pending = false;
-    return null;
-  }
-
-  for (const id of candIds) walls[id].pending = false;
-  const chosenSide = cands[chosen];
-  const chosenId = cellWalls(cell.r, cell.c)[chosenSide];
-  walls[chosenId].state = 'OPEN';
-  stats.wallsCollapsed++;
-  console.log(`[Q] cell (${cell.r},${cell.c}) k=${cands.length} → opened ${chosenSide} (${chosenId})`);
-  if (walls[chosenId].isExit) onExitOpened(cell.r);
-  return chosenSide;
 }
 
 // v0.3: classical pre-measurement filter. For each SUPERPOSED wall at `cell`:
@@ -521,142 +364,10 @@ async function enterCell(cell) {
   inputLocked = false;
 }
 
-// Can the player still progress to an unvisited cell directly from `cell`
-// through any currently-OPEN wall? (Used to decide if we should auto-backtrack.)
-function canMoveFromHere(cell) {
-  for (const side of SIDES) {
-    const id = cellWalls(cell.r, cell.c)[side];
-    if (!walls[id] || walls[id].state !== 'OPEN') continue;
-    if (walls[id].isExit && side === 'E' && cell.c === GRID - 1) return true;
-    const t = sideToCoord(cell, side);
-    if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-    if (!cells[t.r][t.c].visited) return true;
-  }
-  return false;
-}
-
-// Is `cell` a useful place for the generation stack to re-enter? Either a
-// fresh W-state can fire here, or a Bell-opened wall already leads somewhere new.
-function canMakeProgressFrom(cell) {
-  if (validCandidates(cell).length > 0) return true;
-  return canMoveFromHere(cell);
-}
-
-async function tryBacktrack() {
-  // Pop the current cell (it has no more progress to offer).
-  const dead = stack.pop();
-  if (dead) markCellDone(dead);
-
-  while (stack.length > 0) {
-    const top = stack[stack.length - 1];
-    if (canMakeProgressFrom(top)) {
-      flashes.push({ kind: 'teleport', r: top.r, c: top.c, t: 0, lifetime: 700 });
-      player.r = top.r;
-      player.c = top.c;
-      render();
-      await sleep(450);
-      // If a W-state can still fire here, run it; otherwise the player is
-      // arriving at a Bell-opened wormhole and can just walk forward.
-      if (validCandidates(top).length > 0) await processWState(top);
-      if (!canMakeProgressFrom(top)) {
-        const d2 = stack.pop();
-        markCellDone(d2);
-        continue;
-      }
-      return;
-    }
-    const d2 = stack.pop();
-    markCellDone(d2);
-  }
-  await endGeneration();
-}
-
-function markCellDone(_cell) {
-  // 0.2: no-op. The exit row is pre-determined at game start; column-14 cells
-  // being popped from the DFS stack no longer carry any exit-forcing logic.
-}
-
 function onExitOpened(r) {
   if (exitOpenedRow !== null) return;
   exitOpenedRow = r;
   setStatus(`★ Exit opened on row ${r}. Reach it and step right to escape.`);
-}
-
-async function endGeneration() {
-  // Cascade-collapse any leftover superposed/entangled walls to solid.
-  for (const id in walls) {
-    if (walls[id].state === 'SUPERPOSED' || walls[id].state === 'ENTANGLED') {
-      walls[id].state = 'SOLID';
-      stats.wallsCollapsed++;
-    }
-  }
-  // 0.2: ensure start can reach the pre-determined exit cell. Orphan repair
-  // already ran per-Bell, so this is just a final safety net for the path
-  // from (0,0) to (exitRow, GRID-1).
-  repairConnectivity({ r: 0, c: 0 }, { r: exitRow, c: GRID - 1 });
-  setStatus(`Generation complete. Exit on row ${exitRow}.`);
-}
-
-function repairConnectivity(from, to) {
-  const reachable = new Set([`${from.r},${from.c}`]);
-  const q = [from];
-  while (q.length) {
-    const cur = q.shift();
-    for (const side of SIDES) {
-      const id = cellWalls(cur.r, cur.c)[side];
-      if (!walls[id] || walls[id].state !== 'OPEN') continue;
-      const t = sideToCoord(cur, side);
-      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-      const key = `${t.r},${t.c}`;
-      if (reachable.has(key)) continue;
-      reachable.add(key);
-      q.push(t);
-    }
-  }
-  if (reachable.has(`${to.r},${to.c}`)) return;
-
-  // Disconnected. Dijkstra: OPEN walls cost 0, SOLID interior walls cost 1,
-  // borders are impassable. Walk back from `to`, force-open each SOLID wall.
-  const dist = new Map();
-  const parent = new Map();
-  const startKey = `${from.r},${from.c}`;
-  dist.set(startKey, 0);
-  const queue = [[0, from.r, from.c]];
-  while (queue.length) {
-    queue.sort((a, b) => a[0] - b[0]);
-    const [d, r, c] = queue.shift();
-    if (d !== dist.get(`${r},${c}`)) continue;
-    if (r === to.r && c === to.c) break;
-    for (const side of SIDES) {
-      const id = cellWalls(r, c)[side];
-      if (!walls[id] || walls[id].isBorder || walls[id].isExit) continue;
-      const t = sideToCoord({ r, c }, side);
-      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-      const cost = walls[id].state === 'OPEN' ? 0 : 1;
-      const nd = d + cost;
-      const key = `${t.r},${t.c}`;
-      if (!dist.has(key) || dist.get(key) > nd) {
-        dist.set(key, nd);
-        parent.set(key, { from: { r, c }, wallId: id });
-        queue.push([nd, t.r, t.c]);
-      }
-    }
-  }
-  let broke = 0;
-  let cur = { r: to.r, c: to.c };
-  while (parent.has(`${cur.r},${cur.c}`)) {
-    const p = parent.get(`${cur.r},${cur.c}`);
-    if (walls[p.wallId].state === 'SOLID') {
-      walls[p.wallId].state = 'OPEN';
-      flashes.push({ kind: 'repair', wallId: p.wallId, t: 0, lifetime: 1800 });
-      broke++;
-    }
-    cur = p.from;
-  }
-  if (broke > 0) {
-    console.log(`[Q] post-collapse repair: forced ${broke} wall(s) open to connect start to exit`);
-    setStatus(`★ Quantum collapse left a disconnected maze — ${broke} wall(s) classically repaired.`);
-  }
 }
 
 // ===== Input =====
@@ -1034,7 +745,6 @@ function resetState() {
     }
   }
   for (const id in walls) delete walls[id];
-  stack.length = 0;
   flashes.length = 0;
   player.r = 0;
   player.c = 0;
