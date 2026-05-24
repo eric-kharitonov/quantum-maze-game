@@ -330,6 +330,43 @@ function shortestSolidPath(reachable, to) {
   return wallIds;
 }
 
+// v0.3: fire one non-zero superposition circuit over `candidates` (an array
+// of sides like ['N','E','S']). Mutates wall states accordingly:
+//   - each bit_i = 1 -> wall_i -> OPEN
+//   - each bit_i = 0 -> wall_i -> SOLID
+// At least one is guaranteed OPEN (k=0 should never call this).
+async function processNonzeroCircuit(cell, candidates) {
+  if (candidates.length === 0) return [];
+
+  const candIds = candidates.map(s => cellWalls(cell.r, cell.c)[s]);
+  const candCoords = candidates.map(s => {
+    const t = sideToCoord(cell, s);
+    return [t.r, t.c];
+  });
+  for (const id of candIds) walls[id].pending = true;
+  render();
+
+  let outcomes;
+  try {
+    outcomes = await Quantum.nonzero([cell.r, cell.c], candCoords);
+  } catch (e) {
+    console.error('Non-zero circuit call failed', e);
+    for (const id of candIds) walls[id].pending = false;
+    return [];
+  }
+
+  const opened = [];
+  for (let i = 0; i < candIds.length; i++) {
+    const id = candIds[i];
+    walls[id].pending = false;
+    walls[id].state = outcomes[i] === 1 ? 'OPEN' : 'SOLID';
+    stats.wallsCollapsed++;
+    if (outcomes[i] === 1) opened.push(candidates[i]);
+  }
+  console.log(`[Q] cell (${cell.r},${cell.c}) k=${candidates.length} -> outcomes [${outcomes.join(',')}], opened: ${opened.join(',') || '(none - bug)'}`);
+  return opened;
+}
+
 async function processWState(cell) {
   const cands = validCandidates(cell);
   if (cands.length === 0) return null;
