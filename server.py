@@ -27,6 +27,38 @@ def build_w_state(k):
     return qc
 
 
+def build_nonzero(k):
+    """Hadamard layer on k qubits: uniform superposition over all 2^k strings.
+
+    To produce the non-zero superposition state |ψ> = (1/sqrt(2^k - 1)) *
+    sum_{x != 0} |x>, sample this circuit and reject the all-zero outcome.
+    Use sample_nonzero(k) for the post-selected outcome directly.
+    """
+    qc = QuantumCircuit(k, k)
+    for i in range(k):
+        qc.h(i)
+    qc.measure(range(k), range(k))
+    return qc
+
+
+def sample_nonzero(k, max_retries=64):
+    """Sample one outcome from the non-zero superposition state.
+
+    Runs build_nonzero(k) repeatedly, discarding all-zero outcomes. With k
+    qubits, P(all-zero) = 1/2^k so expected retries is 2^k/(2^k - 1) <= 2.
+
+    Returns the bitstring (big-endian: position -(i+1) is qubit i).
+    Raises RuntimeError if max_retries exhausted (should never happen
+    statistically for k >= 1).
+    """
+    qc = build_nonzero(k)
+    for _ in range(max_retries):
+        bitstring = run_once(qc)
+        if "1" in bitstring:
+            return bitstring
+    raise RuntimeError(f"rejection sampling exhausted for k={k}")
+
+
 def build_bell():
     """Standard Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2."""
     qc = QuantumCircuit(2, 2)
