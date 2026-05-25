@@ -68,6 +68,28 @@ def build_bell():
     return qc
 
 
+def build_chsh(alice_angle_rad, bob_angle_rad):
+    """Bell pair measured along requested axes. Used for the CHSH inequality
+    test: with alice_angle in {0, pi/4} and bob_angle in {pi/8, -pi/8},
+    repeated trials produce S = 2*sqrt(2) ~ 2.828, violating the classical
+    bound |S| <= 2.
+
+    The factor of 2 in RY(-2*angle) comes from the half-angle representation
+    of Bloch sphere rotations: RY(theta) rotates the state vector by theta/2
+    on the sphere, so to rotate the measurement axis by `angle`, we apply
+    RY(-2*angle) before the standard Z-basis measurement.
+    """
+    qc = QuantumCircuit(2, 2)
+    # Prepare |Phi+>:
+    qc.h(0)
+    qc.cx(0, 1)
+    # Rotate each qubit so the measurement axis aligns with the requested angle.
+    qc.ry(-2 * alice_angle_rad, 0)
+    qc.ry(-2 * bob_angle_rad, 1)
+    qc.measure([0, 1], [0, 1])
+    return qc
+
+
 def run_once(qc):
     job = simulator.run(qc, shots=1)
     result = job.result()
@@ -96,6 +118,21 @@ def collapse():
         qc = build_bell()
         bitstring = run_once(qc)
         # bitstring is "q1q0" → bitstring[1]=q0, bitstring[0]=q1
+        a = int(bitstring[1])
+        b = int(bitstring[0])
+        return jsonify({"a": a, "b": b})
+
+    elif circuit_type == "chsh":
+        try:
+            alice_deg = float(data.get("alice_angle_deg", 0.0))
+            bob_deg = float(data.get("bob_angle_deg", 0.0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "alice_angle_deg/bob_angle_deg must be numbers"}), 400
+        alice_rad = np.deg2rad(alice_deg)
+        bob_rad = np.deg2rad(bob_deg)
+        qc = build_chsh(alice_rad, bob_rad)
+        bitstring = run_once(qc)
+        # bitstring is "q1q0" -> bitstring[1] = q0 = Alice's outcome.
         a = int(bitstring[1])
         b = int(bitstring[0])
         return jsonify({"a": a, "b": b})
