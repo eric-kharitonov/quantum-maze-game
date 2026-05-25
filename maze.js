@@ -727,6 +727,34 @@ function drawMain() {
   ctx.restore();
 }
 
+// v0.4: draw a dashed thread between each currently-ENTANGLED Bell pair on
+// the minimap. Makes the non-local connection visible BEFORE it fires --
+// when one wall is later measured, its partner collapses simultaneously
+// (the existing purple pulse), and at that moment both walls leave the
+// ENTANGLED state so the thread disappears.
+function drawBellThreads(ctx, size) {
+  const drawn = new Set();
+  ctx.save();
+  ctx.strokeStyle = 'rgba(179, 102, 255, 0.35)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  for (const id in walls) {
+    const w = walls[id];
+    if (w.state !== 'ENTANGLED') continue;
+    if (drawn.has(id)) continue;
+    if (!w.bellPartner) continue;
+    const a = wallCenter(id);
+    const b = wallCenter(w.bellPartner);
+    ctx.beginPath();
+    ctx.moveTo(a.c * size, a.r * size);
+    ctx.lineTo(b.c * size, b.r * size);
+    ctx.stroke();
+    drawn.add(id);
+    drawn.add(w.bellPartner);
+  }
+  ctx.restore();
+}
+
 function drawMini() {
   const ctx = miniCtx;
   ctx.fillStyle = COLOR.bg;
@@ -739,6 +767,9 @@ function drawMini() {
       }
     }
   }
+  // v0.4: draw Bell threads beneath everything else (so collapsed walls,
+  // flashes, and the player dot sit on top).
+  drawBellThreads(ctx, MINI);
   for (const id in walls) drawWall(ctx, id, MINI, true);
   for (const f of flashes) if (f.kind === 'bell') drawFlash(ctx, f, MINI);
   drawPlayer(ctx, MINI);
