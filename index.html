@@ -101,6 +101,46 @@
     text-align: center;
     line-height: 1.7;
   }
+  #chsh-panel {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #1a1a2e;
+    color: #888;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    line-height: 1.5;
+    min-width: 180px;
+  }
+  #chsh-panel .title {
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 9px;
+    margin-bottom: 8px;
+  }
+  #chsh-panel .stat {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2px;
+  }
+  #chsh-panel .k { color: #555; }
+  #chsh-panel .v { color: #aaa; font-variant-numeric: tabular-nums; }
+  #chsh-panel #chsh-s { color: #4dffdd; font-size: 13px; font-weight: 500; }
+  #chsh-panel canvas { display: block; margin-top: 8px; }
+  #chsh-panel .bounds {
+    display: flex;
+    justify-content: space-between;
+    font-size: 8px;
+    color: #555;
+    margin-top: 2px;
+  }
+  #chsh-panel .status {
+    margin-top: 8px;
+    font-size: 10px;
+    color: #ffb84d;
+    min-height: 14px;
+  }
+  #chsh-panel.confirmed .status { color: #4dffdd; }
   #instructions .key {
     background: #1a1a2e;
     color: #aaa;
@@ -136,13 +176,21 @@
   </div>
   <div class="panel">
     <div class="label">Minimap &middot; collapsed only</div>
-    <canvas id="mini" width="180" height="180"></canvas>
+    <canvas id="mini" width="180" height="180" style="cursor: pointer"></canvas>
     <div id="stats">
       <div class="row"><span class="k">Steps</span><span id="s-steps">0</span></div>
       <div class="row"><span class="k">Walls collapsed</span><span id="s-walls">0</span></div>
       <div class="row"><span class="k">Bell flashes</span><span id="s-bell">0</span></div>
     </div>
     <button id="restart" type="button">Restart</button>
+    <div id="chsh-panel">
+      <div class="title">CHSH self-test</div>
+      <div class="stat"><span class="k">trials</span><span class="v" id="chsh-trials">0</span></div>
+      <div class="stat"><span class="k">S</span><span class="v" id="chsh-s">—</span></div>
+      <canvas id="chsh-bar" width="180" height="10"></canvas>
+      <div class="bounds"><span>0</span><span>classical 2.0</span><span>2.83</span></div>
+      <div class="status" id="chsh-status">Accumulating measurements…</div>
+    </div>
   </div>
 </div>
 <div id="status"></div>
@@ -158,7 +206,7 @@
   Walls in superposition collapse when you observe them. Some walls are secretly entangled &mdash; observing one collapses its distant partner, which flashes on the minimap. Reach the right edge to escape.
 </div>
 
-<script src="quantum.js"></script>
-<script src="maze.js"></script>
+<script src="quantum.js?v=0.4"></script>
+<script src="maze.js?v=0.4"></script>
 </body>
 </html>

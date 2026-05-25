@@ -64,7 +64,6 @@ const cells = Array.from({ length: GRID }, () =>
   Array.from({ length: GRID }, () => ({ visited: false }))
 );
 const walls = {};
-const stack = [];
 const flashes = [];           // { kind, wallId|null, r?, c?, t, lifetime }
 const player = { r: 0, c: 0, facing: 'E' };
 const stats = { steps: 0, wallsCollapsed: 0, bellFlashes: 0 };
@@ -81,6 +80,16 @@ let gameOver = false;
 let pulsePhase = 0;
 let exitOpenedRow = null;
 let exitRow = null;  // 0.2: pre-determined at start() via uniform quantum pick
+
+// v0.4: CHSH self-test state. Tallies per (x, y) input pair.
+const chshTally = {
+  trials: 0,
+  // counts[x][y] = { same: n, diff: n }
+  counts: [[{same:0, diff:0}, {same:0, diff:0}], [{same:0, diff:0}, {same:0, diff:0}]],
+};
+let chshSessionId = 0;          // increment on each start() to cancel old loops
+let chshRunning = false;
+let amplitudeBars = [];          // { wallId, marginal, t, lifetime, collapsed }
 
 // ===== Init =====
 function initWalls() {
@@ -126,28 +135,54 @@ function wallDist(a, b) {
   return Math.abs(ca.r - cb.r) + Math.abs(ca.c - cb.c);
 }
 
+// Helper: return the two cell-keys "r,c" flanking a wall ID.
+function wallFlankCells(id) {
+  const [type, rs, cs] = id.split(':');
+  const r = +rs, c = +cs;
+  if (type === 'H') return [`${r},${c}`, `${r + 1},${c}`];
+  return [`${r},${c}`, `${r},${c + 1}`];
+}
+
 function assignBellPairs() {
-  // Walls touching the start cell (0,0) are ineligible for entanglement —
-  // they're the only path out of (0,0), and Bell measurements collapsing both
-  // to SOLID would orphan the start cell on turn 1.
-  const startCellWalls = new Set([hwallId(0, 0), vwallId(0, 0)]);
+  // v0.3 Bell pair rules:
+  //   R1: at most one Bell-paired wall per cell.
+  //   R2: walls adjacent to (0,0) or the pre-picked exit cell are excluded
+  //       (protects against direct local sealing of either endpoint).
+  //   R3: Manhattan distance between paired walls >= 5.
+  //   R4: only non-border, non-exit interior walls.
+  //   R5: target ~10% pair density (i.e. ~20% of interior walls entangled).
+  if (exitRow === null) {
+    console.warn('assignBellPairs: exitRow not yet picked; skipping');
+    return;
+  }
+  const protectedCells = new Set(['0,0', `${exitRow},${GRID - 1}`]);
+  const cellHasBellWall = new Set();
+
   const eligible = Object.keys(walls).filter(id => {
     const w = walls[id];
     if (w.isBorder || w.isExit) return false;
-    if (startCellWalls.has(id)) return false;
+    const [a, b] = wallFlankCells(id);
+    if (protectedCells.has(a) || protectedCells.has(b)) return false;
     return true;
   });
   shuffle(eligible);
-  // Target ~20% of walls as entangled (i.e. ~10% of walls as pairs).
+
   const targetPairs = Math.floor(eligible.length * 0.10);
   const used = new Set();
   let made = 0;
+
   for (const w of eligible) {
     if (made >= targetPairs) break;
     if (used.has(w)) continue;
+    const [wa, wb] = wallFlankCells(w);
+    // R1: skip if either flanking cell already has a Bell wall.
+    if (cellHasBellWall.has(wa) || cellHasBellWall.has(wb)) continue;
+
     let best = null, bestDist = -1;
     for (const cand of eligible) {
       if (cand === w || used.has(cand)) continue;
+      const [ca, cb] = wallFlankCells(cand);
+      if (cellHasBellWall.has(ca) || cellHasBellWall.has(cb)) continue;
       const d = wallDist(w, cand);
       if (d > bestDist) { best = cand; bestDist = d; }
     }
@@ -157,32 +192,16 @@ function assignBellPairs() {
       walls[best].state = 'ENTANGLED';
       walls[best].bellPartner = w;
       used.add(w); used.add(best);
+      cellHasBellWall.add(wa); cellHasBellWall.add(wb);
+      const [ba, bb] = wallFlankCells(best);
+      cellHasBellWall.add(ba); cellHasBellWall.add(bb);
       made++;
     }
   }
+  console.log(`[Bell] assigned ${made} pair(s), ${cellHasBellWall.size} cells touched`);
 }
 
 // ===== Algorithm =====
-
-// A side `s` is a valid W-state candidate at `cell` iff its wall is SUPERPOSED
-// and the neighbor on the other side is unvisited. 0.2: exit walls are excluded
-// entirely — the exit row is pre-determined at game start and opens on arrival,
-// not via W-state carving.
-function isValidCandidate(cell, side) {
-  const id = cellWalls(cell.r, cell.c)[side];
-  const w = walls[id];
-  if (!w) return false;
-  if (w.state !== 'SUPERPOSED') return false;
-  if (w.isExit) return false;
-  if (w.isBorder) return false;
-  const t = sideToCoord(cell, side);
-  if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) return false;
-  return !cells[t.r][t.c].visited;
-}
-
-function validCandidates(cell) {
-  return SIDES.filter(s => isValidCandidate(cell, s));
-}
 
 async function processBell(cell) {
   for (const side of SIDES) {
@@ -218,24 +237,22 @@ async function processBell(cell) {
       flashes.push({ kind: 'bell', wallId: w.bellPartner, t: 0, lifetime: 1400 });
       stats.bellFlashes++;
     }
-    // 0.2: a Bell measurement can close a remote wall to SOLID and orphan a
-    // region of unvisited cells. Re-check reachability after each collapse
-    // and force-open the minimum set of walls to reconnect any orphans.
-    repairOrphans();
+    // v0.3: no classical override. Orphans (if any) are detected in
+    // enterCell via checkExitSealed and the game ends honestly.
   }
 }
 
-// 0.2: classical post-Bell connectivity repair. From (0,0), BFS through any
-// non-SOLID wall (OPEN, SUPERPOSED, ENTANGLED — all are walls that *could*
-// still become passages). Any cell unreachable that way is orphaned: every
-// path to it is blocked by SOLID walls. For each orphan, run a Dijkstra
-// (SOLID cost 1, non-SOLID cost 0) from the reachable set, and force open
-// the minimum set of SOLID walls to reconnect it.
-function repairOrphans() {
-  const reachable = new Set(['0,0']);
-  const q = [{ r: 0, c: 0 }];
+// v0.3: after every cell entry, verify the exit cell is still reachable
+// from the player's current position via non-SOLID walls. Returns true if
+// the maze has been sealed off and the player cannot reach the exit.
+function checkExitSealed() {
+  if (exitRow === null) return false;
+  const target = `${exitRow},${GRID - 1}`;
+  const reachable = new Set([`${player.r},${player.c}`]);
+  const q = [{ r: player.r, c: player.c }];
   while (q.length) {
     const cur = q.shift();
+    if (`${cur.r},${cur.c}` === target) return false;
     for (const side of SIDES) {
       const id = cellWalls(cur.r, cur.c)[side];
       if (!walls[id] || walls[id].state === 'SOLID') continue;
@@ -247,145 +264,147 @@ function repairOrphans() {
       q.push(t);
     }
   }
-  if (reachable.size === GRID * GRID) return;
-
-  // Find orphans. For each, Dijkstra from reachable set; force open the
-  // SOLID walls along the cheapest path. The orphans then join `reachable`
-  // and we move on.
-  let forced = 0;
-  for (let r = 0; r < GRID; r++) {
-    for (let c = 0; c < GRID; c++) {
-      const key = `${r},${c}`;
-      if (reachable.has(key)) continue;
-      const path = shortestSolidPath(reachable, { r, c });
-      for (const wallId of path) {
-        if (walls[wallId].state === 'SOLID') {
-          walls[wallId].state = 'OPEN';
-          flashes.push({ kind: 'repair', wallId, t: 0, lifetime: 1800 });
-          forced++;
-        }
-      }
-      // Mark the orphan cell (and any newly-connected neighbors) reachable.
-      const nq = [{ r, c }];
-      reachable.add(key);
-      while (nq.length) {
-        const cur = nq.shift();
-        for (const side of SIDES) {
-          const id = cellWalls(cur.r, cur.c)[side];
-          if (!walls[id] || walls[id].state === 'SOLID') continue;
-          const t = sideToCoord(cur, side);
-          if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-          const k2 = `${t.r},${t.c}`;
-          if (reachable.has(k2)) continue;
-          reachable.add(k2);
-          nq.push(t);
-        }
-      }
-    }
-  }
-  if (forced > 0) {
-    console.log(`[Q] orphan repair: forced ${forced} wall(s) open`);
-  }
+  return true;  // exit not in reachable set
 }
 
-// Dijkstra from any cell in `reachable` to target `to`. Edge costs: 0 if the
-// wall is non-SOLID (already passable or will be), 1 if SOLID (must force).
-// Returns the list of wall IDs along the cheapest path.
-function shortestSolidPath(reachable, to) {
-  const dist = new Map();
-  const parent = new Map();
-  const queue = [];
-  for (const k of reachable) {
-    dist.set(k, 0);
-    const [r, c] = k.split(',').map(Number);
-    queue.push([0, r, c]);
-  }
-  while (queue.length) {
-    queue.sort((a, b) => a[0] - b[0]);
-    const [d, r, c] = queue.shift();
-    if (d !== dist.get(`${r},${c}`)) continue;
-    if (r === to.r && c === to.c) break;
-    for (const side of SIDES) {
-      const id = cellWalls(r, c)[side];
-      if (!walls[id] || walls[id].isBorder || walls[id].isExit) continue;
-      const t = sideToCoord({ r, c }, side);
-      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-      const cost = walls[id].state === 'SOLID' ? 1 : 0;
-      const nd = d + cost;
-      const key = `${t.r},${t.c}`;
-      if (!dist.has(key) || dist.get(key) > nd) {
-        dist.set(key, nd);
-        parent.set(key, { from: { r, c }, wallId: id });
-        queue.push([nd, t.r, t.c]);
-      }
-    }
-  }
-  const wallIds = [];
-  let cur = { r: to.r, c: to.c };
-  while (parent.has(`${cur.r},${cur.c}`)) {
-    const p = parent.get(`${cur.r},${cur.c}`);
-    wallIds.push(p.wallId);
-    cur = p.from;
-  }
-  return wallIds;
-}
+// v0.3: fire one non-zero superposition circuit over `candidates` (an array
+// of sides like ['N','E','S']). Mutates wall states accordingly:
+//   - each bit_i = 1 -> wall_i -> OPEN
+//   - each bit_i = 0 -> wall_i -> SOLID
+// At least one is guaranteed OPEN (k=0 should never call this).
+async function processNonzeroCircuit(cell, candidates) {
+  if (candidates.length === 0) return [];
 
-async function processWState(cell) {
-  const cands = validCandidates(cell);
-  if (cands.length === 0) return null;
-
-  const candIds = cands.map(s => cellWalls(cell.r, cell.c)[s]);
-  const candCoords = cands.map(s => {
+  const candIds = candidates.map(s => cellWalls(cell.r, cell.c)[s]);
+  const candCoords = candidates.map(s => {
     const t = sideToCoord(cell, s);
     return [t.r, t.c];
   });
   for (const id of candIds) walls[id].pending = true;
+  // v0.4: spawn amplitude bars for each candidate. Marginal P(open) for the
+  // non-zero superposition state is 2^(k-1) / (2^k - 1).
+  const k = candidates.length;
+  const marginal = Math.pow(2, k - 1) / (Math.pow(2, k) - 1);
+  const barLifetime = 1200; // ms; ample time to see them pre-collapse
+  const bornAt = performance.now();
+  for (const id of candIds) {
+    amplitudeBars.push({ wallId: id, marginal, bornAt, lifetime: barLifetime, collapsedAt: null });
+  }
   render();
 
-  let chosen;
+  let outcomes;
   try {
-    chosen = await Quantum.wState([cell.r, cell.c], candCoords);
+    outcomes = await Quantum.nonzero([cell.r, cell.c], candCoords);
   } catch (e) {
-    console.error('W-state call failed', e);
+    console.error('Non-zero circuit call failed', e);
     for (const id of candIds) walls[id].pending = false;
-    return null;
+    // Cancel bars
+    for (const bar of amplitudeBars) {
+      if (candIds.includes(bar.wallId)) bar.collapsedAt = performance.now();
+    }
+    return [];
   }
 
-  for (const id of candIds) walls[id].pending = false;
-  const chosenSide = cands[chosen];
-  const chosenId = cellWalls(cell.r, cell.c)[chosenSide];
-  walls[chosenId].state = 'OPEN';
-  stats.wallsCollapsed++;
-  console.log(`[Q] cell (${cell.r},${cell.c}) k=${cands.length} → opened ${chosenSide} (${chosenId})`);
-  if (walls[chosenId].isExit) onExitOpened(cell.r);
-  return chosenSide;
+  const opened = [];
+  for (let i = 0; i < candIds.length; i++) {
+    const id = candIds[i];
+    walls[id].pending = false;
+    walls[id].state = outcomes[i] === 1 ? 'OPEN' : 'SOLID';
+    stats.wallsCollapsed++;
+    if (outcomes[i] === 1) opened.push(candidates[i]);
+  }
+  // Stamp collapse time onto the bars; the frame loop will fade them out.
+  const now = performance.now();
+  for (const bar of amplitudeBars) {
+    if (candIds.includes(bar.wallId) && bar.collapsedAt === null) {
+      bar.collapsedAt = now;
+    }
+  }
+  console.log(`[Q] cell (${cell.r},${cell.c}) k=${k} marginal=${(marginal*100).toFixed(0)}% -> outcomes [${outcomes.join(',')}], opened: ${opened.join(',') || '(none - bug)'}`);
+  return opened;
+}
+
+// v0.3: classical pre-measurement filter. For each SUPERPOSED wall at `cell`:
+//   - if neighbor is visited -> SOLID (loop prevention)
+//   - if neighbor is unvisited but already reachable from {visited} via
+//     OPEN walls -> SOLID (cycle prevention)
+// Returns the array of remaining-SUPERPOSED candidate sides for the
+// non-zero circuit to measure.
+function applyLoopAndCyclePrevention(cell) {
+  // Step 1: BFS from visited set through OPEN walls -> reachable set.
+  const reachable = new Set();
+  const seedQ = [];
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      if (cells[r][c].visited) {
+        reachable.add(`${r},${c}`);
+        seedQ.push({ r, c });
+      }
+    }
+  }
+  while (seedQ.length) {
+    const cur = seedQ.shift();
+    for (const side of SIDES) {
+      const id = cellWalls(cur.r, cur.c)[side];
+      if (!walls[id] || walls[id].state !== 'OPEN') continue;
+      const t = sideToCoord(cur, side);
+      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
+      const key = `${t.r},${t.c}`;
+      if (reachable.has(key)) continue;
+      reachable.add(key);
+      seedQ.push(t);
+    }
+  }
+
+  // Step 2: for each side of `cell`, decide.
+  const candidates = [];
+  for (const side of SIDES) {
+    const id = cellWalls(cell.r, cell.c)[side];
+    const w = walls[id];
+    if (!w) continue;
+    if (w.state !== 'SUPERPOSED') continue;
+    if (w.isExit) continue;     // exit wall never enters the circuit
+    if (w.isBorder) continue;   // border walls aren't candidates
+    const t = sideToCoord(cell, side);
+    if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
+    if (cells[t.r][t.c].visited) {
+      walls[id].state = 'SOLID';  // loop prevention
+      stats.wallsCollapsed++;
+      continue;
+    }
+    if (reachable.has(`${t.r},${t.c}`)) {
+      walls[id].state = 'SOLID';  // cycle prevention
+      stats.wallsCollapsed++;
+      continue;
+    }
+    candidates.push(side);
+  }
+  return candidates;
 }
 
 async function enterCell(cell) {
   inputLocked = true;
   cells[cell.r][cell.c].visited = true;
-  stack.push({ r: cell.r, c: cell.c });
   stats.steps++;
 
-  // Walls between this cell and adjacent already-visited cells (other than the
-  // entry wall, which is already OPEN) become SOLID — those connections would
-  // form loops, so they're permanently closed.
-  for (const side of SIDES) {
-    const id = cellWalls(cell.r, cell.c)[side];
-    if (!walls[id] || walls[id].state !== 'SUPERPOSED') continue;
-    const t = sideToCoord(cell, side);
-    if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-    if (cells[t.r][t.c].visited) {
-      walls[id].state = 'SOLID';
-      stats.wallsCollapsed++;
-    }
+  // v0.3 pipeline:
+  // 1. Bell measurements on any ENTANGLED walls adjacent to this cell.
+  //    Bell can produce OPEN outcomes that bypass cycle prevention --
+  //    these are "Bell wormholes," accepted per the spec.
+  await processBell(cell);
+
+  // 2. Loop prevention + cycle prevention. Returns the surviving SUPERPOSED
+  //    candidate sides to feed into the non-zero circuit.
+  const candidates = applyLoopAndCyclePrevention(cell);
+
+  // 3. Single non-zero circuit over all candidates. Guarantees >=1 OPEN
+  //    if k >= 1; if k = 0 this is a structural dead end and the player
+  //    walks back through the entry wall manually.
+  if (candidates.length > 0) {
+    await processNonzeroCircuit(cell, candidates);
   }
 
-  await processBell(cell);
-  await processWState(cell);
-
-  // 0.2: pre-determined exit. When the player reaches the chosen exit cell,
-  // the right-border wall opens deterministically.
+  // 4. If this is the pre-picked exit cell, open the exit wall deterministically.
   if (cell.r === exitRow && cell.c === GRID - 1) {
     const id = vwallId(exitRow, GRID - 1);
     if (walls[id].state !== 'OPEN') {
@@ -395,149 +414,20 @@ async function enterCell(cell) {
     }
   }
 
-  if (validCandidates(cell).length === 0 && !canMoveFromHere(cell)) {
-    await tryBacktrack();
+  // 5. Orphan check. If the exit is no longer reachable, end the game
+  //    honestly -- no classical override.
+  if (checkExitSealed()) {
+    gameOver = true;
+    setStatus('★ Quantum entanglement sealed this maze. Restart for a new measurement.');
   }
 
   inputLocked = false;
-}
-
-// Can the player still progress to an unvisited cell directly from `cell`
-// through any currently-OPEN wall? (Used to decide if we should auto-backtrack.)
-function canMoveFromHere(cell) {
-  for (const side of SIDES) {
-    const id = cellWalls(cell.r, cell.c)[side];
-    if (!walls[id] || walls[id].state !== 'OPEN') continue;
-    if (walls[id].isExit && side === 'E' && cell.c === GRID - 1) return true;
-    const t = sideToCoord(cell, side);
-    if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-    if (!cells[t.r][t.c].visited) return true;
-  }
-  return false;
-}
-
-// Is `cell` a useful place for the generation stack to re-enter? Either a
-// fresh W-state can fire here, or a Bell-opened wall already leads somewhere new.
-function canMakeProgressFrom(cell) {
-  if (validCandidates(cell).length > 0) return true;
-  return canMoveFromHere(cell);
-}
-
-async function tryBacktrack() {
-  // Pop the current cell (it has no more progress to offer).
-  const dead = stack.pop();
-  if (dead) markCellDone(dead);
-
-  while (stack.length > 0) {
-    const top = stack[stack.length - 1];
-    if (canMakeProgressFrom(top)) {
-      flashes.push({ kind: 'teleport', r: top.r, c: top.c, t: 0, lifetime: 700 });
-      player.r = top.r;
-      player.c = top.c;
-      render();
-      await sleep(450);
-      // If a W-state can still fire here, run it; otherwise the player is
-      // arriving at a Bell-opened wormhole and can just walk forward.
-      if (validCandidates(top).length > 0) await processWState(top);
-      if (!canMakeProgressFrom(top)) {
-        const d2 = stack.pop();
-        markCellDone(d2);
-        continue;
-      }
-      return;
-    }
-    const d2 = stack.pop();
-    markCellDone(d2);
-  }
-  await endGeneration();
-}
-
-function markCellDone(_cell) {
-  // 0.2: no-op. The exit row is pre-determined at game start; column-14 cells
-  // being popped from the DFS stack no longer carry any exit-forcing logic.
 }
 
 function onExitOpened(r) {
   if (exitOpenedRow !== null) return;
   exitOpenedRow = r;
   setStatus(`★ Exit opened on row ${r}. Reach it and step right to escape.`);
-}
-
-async function endGeneration() {
-  // Cascade-collapse any leftover superposed/entangled walls to solid.
-  for (const id in walls) {
-    if (walls[id].state === 'SUPERPOSED' || walls[id].state === 'ENTANGLED') {
-      walls[id].state = 'SOLID';
-      stats.wallsCollapsed++;
-    }
-  }
-  // 0.2: ensure start can reach the pre-determined exit cell. Orphan repair
-  // already ran per-Bell, so this is just a final safety net for the path
-  // from (0,0) to (exitRow, GRID-1).
-  repairConnectivity({ r: 0, c: 0 }, { r: exitRow, c: GRID - 1 });
-  setStatus(`Generation complete. Exit on row ${exitRow}.`);
-}
-
-function repairConnectivity(from, to) {
-  const reachable = new Set([`${from.r},${from.c}`]);
-  const q = [from];
-  while (q.length) {
-    const cur = q.shift();
-    for (const side of SIDES) {
-      const id = cellWalls(cur.r, cur.c)[side];
-      if (!walls[id] || walls[id].state !== 'OPEN') continue;
-      const t = sideToCoord(cur, side);
-      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-      const key = `${t.r},${t.c}`;
-      if (reachable.has(key)) continue;
-      reachable.add(key);
-      q.push(t);
-    }
-  }
-  if (reachable.has(`${to.r},${to.c}`)) return;
-
-  // Disconnected. Dijkstra: OPEN walls cost 0, SOLID interior walls cost 1,
-  // borders are impassable. Walk back from `to`, force-open each SOLID wall.
-  const dist = new Map();
-  const parent = new Map();
-  const startKey = `${from.r},${from.c}`;
-  dist.set(startKey, 0);
-  const queue = [[0, from.r, from.c]];
-  while (queue.length) {
-    queue.sort((a, b) => a[0] - b[0]);
-    const [d, r, c] = queue.shift();
-    if (d !== dist.get(`${r},${c}`)) continue;
-    if (r === to.r && c === to.c) break;
-    for (const side of SIDES) {
-      const id = cellWalls(r, c)[side];
-      if (!walls[id] || walls[id].isBorder || walls[id].isExit) continue;
-      const t = sideToCoord({ r, c }, side);
-      if (t.r < 0 || t.r >= GRID || t.c < 0 || t.c >= GRID) continue;
-      const cost = walls[id].state === 'OPEN' ? 0 : 1;
-      const nd = d + cost;
-      const key = `${t.r},${t.c}`;
-      if (!dist.has(key) || dist.get(key) > nd) {
-        dist.set(key, nd);
-        parent.set(key, { from: { r, c }, wallId: id });
-        queue.push([nd, t.r, t.c]);
-      }
-    }
-  }
-  let broke = 0;
-  let cur = { r: to.r, c: to.c };
-  while (parent.has(`${cur.r},${cur.c}`)) {
-    const p = parent.get(`${cur.r},${cur.c}`);
-    if (walls[p.wallId].state === 'SOLID') {
-      walls[p.wallId].state = 'OPEN';
-      flashes.push({ kind: 'repair', wallId: p.wallId, t: 0, lifetime: 1800 });
-      broke++;
-    }
-    cur = p.from;
-  }
-  if (broke > 0) {
-    console.log(`[Q] post-collapse repair: forced ${broke} wall(s) open to connect start to exit`);
-    setStatus(`★ Quantum collapse left a disconnected maze — ${broke} wall(s) classically repaired.`);
-  }
 }
 
 // ===== Input =====
@@ -840,6 +730,11 @@ function drawMain() {
     drawSurface(ctx, [[f.l, f.t], [f.r, f.t], [f.r, f.b], [f.l, f.b]], blocker.state, blocker.pending);
   }
 
+  // v0.4: amplitude-bar overlay panel. Shows P(open) for each candidate wall
+  // currently in the non-zero superposition, with a labeled bar per direction.
+  // Renders only while at least one bar is alive; fades out after collapse.
+  drawAmplitudeOverlay(ctx);
+
   // Compass overlay: facing letter top-center, position bottom-left.
   ctx.save();
   ctx.font = 'bold 14px ui-monospace, monospace';
@@ -857,6 +752,131 @@ function drawMain() {
   ctx.restore();
 }
 
+// v0.4: draw an amplitude-bar overlay near the top of the main view while
+// at least one wall is being measured by the non-zero circuit. Each bar
+// shows P(open) for one candidate wall, labeled by side (N/E/S/W). After
+// collapse, each bar shrinks/jumps to its outcome (100% if OPEN, 0% if
+// SOLID) and fades out.
+function drawAmplitudeOverlay(ctx) {
+  if (amplitudeBars.length === 0) return;
+  const now = performance.now();
+  // Group bars by (cell, wallId). We only show bars whose wall is adjacent
+  // to the player's current cell (i.e. the cell we just entered).
+  const visible = amplitudeBars.filter(bar => {
+    const sides = cellWalls(player.r, player.c);
+    for (const side of ['N','E','S','W']) {
+      if (sides[side] === bar.wallId) return true;
+    }
+    return false;
+  });
+  if (visible.length === 0) return;
+
+  // Card layout: top center, semi-transparent dark background.
+  const padX = 10, padY = 6;
+  const lineH = 14;
+  const cardW = 200;
+  const cardH = padY * 2 + 16 + visible.length * lineH;
+  const cx = (mainCanvas.width - cardW) / 2;
+  const cy = 36;
+
+  // Overall opacity: 1 while not all bars have collapsed, fading after.
+  let overlayAlpha = 1;
+  if (visible.every(b => b.collapsedAt !== null)) {
+    const collapsedAge = now - Math.min(...visible.map(b => b.collapsedAt));
+    overlayAlpha = Math.max(0, 1 - collapsedAge / 400);
+    if (overlayAlpha <= 0) {
+      // Prune fully-faded bars.
+      for (let i = amplitudeBars.length - 1; i >= 0; i--) {
+        if (visible.includes(amplitudeBars[i])) amplitudeBars.splice(i, 1);
+      }
+      return;
+    }
+  }
+
+  ctx.save();
+  ctx.globalAlpha = overlayAlpha;
+  // Background
+  ctx.fillStyle = 'rgba(10, 10, 20, 0.85)';
+  ctx.fillRect(cx, cy, cardW, cardH);
+  ctx.strokeStyle = 'rgba(77, 255, 221, 0.4)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx, cy, cardW, cardH);
+
+  // Title
+  ctx.fillStyle = '#4dffdd';
+  ctx.font = 'bold 11px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const k = visible.length;
+  ctx.fillText(`MEASURING k=${k}  P(open) = ${(visible[0].marginal * 100).toFixed(0)}%`, cx + cardW / 2, cy + padY);
+
+  // Per-wall bars
+  const sides = cellWalls(player.r, player.c);
+  ctx.textAlign = 'left';
+  ctx.font = '10px ui-monospace, monospace';
+  let row = 0;
+  for (const side of ['N','E','S','W']) {
+    const wallId = sides[side];
+    const bar = visible.find(b => b.wallId === wallId);
+    if (!bar) continue;
+    const y = cy + padY + 18 + row * lineH;
+    const labelX = cx + padX;
+    const barX = cx + padX + 28;
+    const barW = cardW - padX * 2 - 28 - 32;
+    // Label
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(side, labelX, y + 2);
+    // Bar background
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(barX, y, barW, 8);
+    // Fill: marginal pre-collapse; outcome post-collapse.
+    let fill = bar.marginal;
+    let color = '#ffb84d';
+    if (bar.collapsedAt !== null) {
+      const w = walls[bar.wallId];
+      fill = w.state === 'OPEN' ? 1 : 0;
+      color = w.state === 'OPEN' ? '#4dffdd' : '#5a5a78';
+    }
+    ctx.fillStyle = color;
+    ctx.fillRect(barX, y, barW * fill, 8);
+    // Percentage text
+    ctx.fillStyle = '#888';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${(fill * 100).toFixed(0)}%`, cx + cardW - padX, y + 2);
+    ctx.textAlign = 'left';
+    row++;
+  }
+  ctx.restore();
+}
+
+// v0.4: draw a dashed thread between each currently-ENTANGLED Bell pair on
+// the minimap. Makes the non-local connection visible BEFORE it fires --
+// when one wall is later measured, its partner collapses simultaneously
+// (the existing purple pulse), and at that moment both walls leave the
+// ENTANGLED state so the thread disappears.
+function drawBellThreads(ctx, size) {
+  const drawn = new Set();
+  ctx.save();
+  ctx.strokeStyle = 'rgba(179, 102, 255, 0.35)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  for (const id in walls) {
+    const w = walls[id];
+    if (w.state !== 'ENTANGLED') continue;
+    if (drawn.has(id)) continue;
+    if (!w.bellPartner) continue;
+    const a = wallCenter(id);
+    const b = wallCenter(w.bellPartner);
+    ctx.beginPath();
+    ctx.moveTo(a.c * size, a.r * size);
+    ctx.lineTo(b.c * size, b.r * size);
+    ctx.stroke();
+    drawn.add(id);
+    drawn.add(w.bellPartner);
+  }
+  ctx.restore();
+}
+
 function drawMini() {
   const ctx = miniCtx;
   ctx.fillStyle = COLOR.bg;
@@ -869,6 +889,9 @@ function drawMini() {
       }
     }
   }
+  // v0.4: draw Bell threads beneath everything else (so collapsed walls,
+  // flashes, and the player dot sit on top).
+  drawBellThreads(ctx, MINI);
   for (const id in walls) drawWall(ctx, id, MINI, true);
   for (const f of flashes) if (f.kind === 'bell') drawFlash(ctx, f, MINI);
   drawPlayer(ctx, MINI);
@@ -880,10 +903,62 @@ function updateStats() {
   document.getElementById('s-bell').textContent = stats.bellFlashes;
 }
 
+// v0.4: render the CHSH self-test panel based on chshTally.
+const CHSH_TSIRELSON = 2 * Math.sqrt(2);  // ~ 2.828
+const chshCanvas = document.getElementById('chsh-bar');
+const chshCtx = chshCanvas ? chshCanvas.getContext('2d') : null;
+const chshPanel = document.getElementById('chsh-panel');
+
+function drawChshPanel() {
+  if (!chshCtx || !chshPanel) return;
+  const trialsEl = document.getElementById('chsh-trials');
+  const sEl = document.getElementById('chsh-s');
+  const statusEl = document.getElementById('chsh-status');
+  trialsEl.textContent = chshTally.trials;
+  const S = computeChshS();
+  const showS = (S !== null && chshTally.trials >= 30);
+  sEl.textContent = showS ? S.toFixed(3) : '—';
+  // Bar
+  const w = chshCanvas.width, h = chshCanvas.height;
+  chshCtx.clearRect(0, 0, w, h);
+  // background track
+  chshCtx.fillStyle = '#1a1a2e';
+  chshCtx.fillRect(0, 0, w, h);
+  // classical-max tick line
+  const tickX = (2.0 / CHSH_TSIRELSON) * w;
+  chshCtx.strokeStyle = '#555';
+  chshCtx.lineWidth = 1;
+  chshCtx.setLineDash([2, 2]);
+  chshCtx.beginPath();
+  chshCtx.moveTo(tickX, 0);
+  chshCtx.lineTo(tickX, h);
+  chshCtx.stroke();
+  chshCtx.setLineDash([]);
+  // current S bar
+  if (S !== null) {
+    const sClamp = Math.max(0, Math.min(S, CHSH_TSIRELSON));
+    const fillW = (sClamp / CHSH_TSIRELSON) * w;
+    chshCtx.fillStyle = S >= 2.0 ? '#4dffdd' : '#ffb84d';
+    chshCtx.fillRect(0, 0, fillW, h);
+  }
+  // Status text + class
+  if (!showS) {
+    statusEl.textContent = 'Accumulating measurements…';
+    chshPanel.classList.remove('confirmed');
+  } else if (S >= 2.0) {
+    statusEl.textContent = '★ Non-locality confirmed (S > 2)';
+    chshPanel.classList.add('confirmed');
+  } else {
+    statusEl.textContent = 'Below classical bound — keep playing';
+    chshPanel.classList.remove('confirmed');
+  }
+}
+
 function render() {
   drawMain();
   drawMini();
   updateStats();
+  drawChshPanel();
 }
 
 function setStatus(msg) {
@@ -915,8 +990,8 @@ function resetState() {
     }
   }
   for (const id in walls) delete walls[id];
-  stack.length = 0;
   flashes.length = 0;
+  amplitudeBars.length = 0;
   player.r = 0;
   player.c = 0;
   player.facing = 'E';
@@ -927,17 +1002,69 @@ function resetState() {
   gameOver = false;
   exitOpenedRow = null;
   exitRow = null;
+  // Reset CHSH tally for the new game.
+  chshTally.trials = 0;
+  for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
+    chshTally.counts[x][y].same = 0;
+    chshTally.counts[x][y].diff = 0;
+  }
   setStatus('');
+}
+
+// v0.4: CHSH self-test loop. Runs in the background while the player plays,
+// firing one Bell-pair trial every ~2 seconds with random (x, y) inputs and
+// the canonical CHSH angles. Tallies wins/losses into chshTally; the panel
+// renders this on every frame. Self-cancels when chshSessionId changes
+// (i.e. when the game restarts).
+async function chshLoop(mySession) {
+  chshRunning = true;
+  // Brief delay before first trial so the start-time exitRow pick goes first.
+  await sleep(1500);
+  while (mySession === chshSessionId) {
+    if (gameOver) { chshRunning = false; return; }
+    const x = Math.random() < 0.5 ? 0 : 1;
+    const y = Math.random() < 0.5 ? 0 : 1;
+    const aliceAngle = x === 0 ? 0.0 : 45.0;
+    const bobAngle = y === 0 ? 22.5 : -22.5;
+    try {
+      const { a, b } = await Quantum.chsh(aliceAngle, bobAngle);
+      if (mySession !== chshSessionId) return;
+      const c = chshTally.counts[x][y];
+      if (a === b) c.same++;
+      else c.diff++;
+      chshTally.trials++;
+    } catch (e) {
+      console.warn('CHSH trial failed; retrying in 10s', e);
+      await sleep(10000);
+      continue;
+    }
+    await sleep(2000);
+  }
+  chshRunning = false;
+}
+
+// Compute the running CHSH S = E(0,0) + E(0,1) + E(1,0) - E(1,1).
+// E(x,y) = (same - diff) / (same + diff). Returns null if not enough data.
+function computeChshS() {
+  if (chshTally.trials < 4) return null;
+  const e = (x, y) => {
+    const c = chshTally.counts[x][y];
+    const total = c.same + c.diff;
+    if (total === 0) return 0;
+    return (c.same - c.diff) / total;
+  };
+  return e(0, 0) + e(0, 1) + e(1, 0) - e(1, 1);
 }
 
 async function start() {
   resetState();
   initWalls();
-  assignBellPairs();
-  // 0.2: pre-pick the exit row via a uniform quantum measurement over rows
-  // 0..GRID-1. We reuse the W-state circuit with GRID dummy candidates — the
-  // W-state collapses to exactly one |1⟩ position with uniform probability,
-  // giving us a genuinely quantum row choice.
+  // v0.3: pre-pick the exit row via a uniform quantum measurement over rows
+  // 0..GRID-1. We reuse the W-state circuit with GRID dummy candidates --
+  // the W-state collapses to exactly one |1> position with uniform
+  // probability, giving us a genuinely quantum row choice. Exit row must
+  // be picked BEFORE assignBellPairs so the Bell rules can exclude walls
+  // adjacent to the exit cell.
   inputLocked = true;
   setStatus('Picking exit row…');
   try {
@@ -948,9 +1075,30 @@ async function start() {
     exitRow = Math.floor(Math.random() * GRID);
   }
   console.log(`[Q] exit pre-determined: row ${exitRow}`);
+  assignBellPairs();
   setStatus('');
+  // v0.4: kick off the CHSH self-test loop for this game session.
+  chshSessionId++;
+  chshLoop(chshSessionId);
   enterCell({ r: 0, c: 0 });
 }
+
+// v0.3: minimap click-to-teleport. Clicking a visited cell jumps the player
+// there. Pure UX -- no measurements fire. Replaces the auto-backtrack
+// teleport that was removed when the DFS stack went away.
+miniCanvas.addEventListener('click', (e) => {
+  if (inputLocked || gameOver) return;
+  const rect = miniCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const c = Math.floor(x / MINI);
+  const r = Math.floor(y / MINI);
+  if (r < 0 || r >= GRID || c < 0 || c >= GRID) return;
+  if (!cells[r][c].visited) return;
+  player.r = r;
+  player.c = c;
+  render();
+});
 
 document.addEventListener('keydown', handleKey);
 document.getElementById('restart').addEventListener('click', () => {
