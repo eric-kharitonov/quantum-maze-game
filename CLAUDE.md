@@ -40,7 +40,10 @@ To run on real IBM quantum hardware instead of the simulator, replace the `AerSi
 
 - **v0.1** (`git tag v0.1`) — initial Quantum Maze with W-state mechanic and post-generation classical repair.
 - **v0.2** (`git tag v0.2`) — pre-pick exit row quantumly, exclude exit walls from W-state, add post-Bell `repairOrphans`.
-- **v0.3** (current `quantum-fidelity` branch) — replace W-state with per-wall non-zero superposition entangled circuit; remove all classical override; orphan-induced seal-offs end the game honestly. Specs in `docs/superpowers/specs/`, plan in `docs/superpowers/plans/`.
+- **v0.3** (`quantum-fidelity` branch, tag `v0.3`) — replace W-state with per-wall non-zero superposition entangled circuit; remove all classical override; orphan-induced seal-offs end the game honestly.
+- **v0.4** (current `quantum-fidelity` HEAD) — adds two verification/visualization layers on top of v0.3: a live **CHSH self-test panel** (runs Bell-pair measurements at varied angles in the background, computes S, displays violation past the classical 2.0 bound), **Bell partner threads** drawn on the minimap (visible non-locality before collapse), and an **amplitude-bar overlay** showing P(open) for each candidate wall during a non-zero circuit measurement. The maze mechanic itself is unchanged from v0.3.
+
+Specs in `docs/superpowers/specs/`, plan in `docs/superpowers/plans/`.
 
 ## Architecture (v0.3)
 
@@ -78,4 +81,12 @@ Empirically ~10% of games end in seal-off; the rest reach the exit.
 
 **Rendering** — `drawMain` draws the first-person 3D view using a painter's algorithm with nested perspective frames (constant `VIEW_SHRINK = 0.62`). `drawMini` draws the top-down minimap. Both canvases share the same `pulsePhase` clock for the amber glow on superposed walls. The `frame` loop advances `pulsePhase` and expires timed flash effects before each `render` call.
 
-**`quantum.js`** — thin fetch wrapper that exposes `window.Quantum = { wState, bell, nonzero }`. The server URL is hardcoded to `http://localhost:5000`. Script tags in `index.html` include `?v=0.3` to invalidate browser HTTP cache when shipping new versions.
+**`quantum.js`** — thin fetch wrapper that exposes `window.Quantum = { wState, bell, nonzero, chsh }`. The server URL is hardcoded to `http://localhost:5000`. Script tags in `index.html` include `?v=0.4` to invalidate browser HTTP cache when shipping new versions.
+
+## v0.4 additions
+
+**CHSH self-test (`chshLoop`, `computeChshS`, `drawChshPanel`)** — runs continuously in the background. Each ~2 seconds, picks random inputs `x, y ∈ {0, 1}`, sends a Bell-pair measurement at canonical CHSH angles (Alice: 0° or 45°; Bob: 22.5° or -22.5°) to `/collapse type=chsh`, tallies same/diff per `(x, y)`. The S value `E(0,0) + E(0,1) + E(1,0) − E(1,1)` is computed live and rendered into the `#chsh-panel` div. Classical bound is `S ≤ 2`; quantum reaches `S ≈ 2.828`. The loop self-cancels when `chshSessionId` changes (game restart).
+
+**Bell partner threads (`drawBellThreads`)** — for every currently-ENTANGLED wall, draw a translucent purple dashed line to its partner's center on the minimap. Disappears the moment the pair collapses. Makes the non-local correlation visible *before* it fires.
+
+**Amplitude bars (`amplitudeBars` array, `drawAmplitudeOverlay`)** — at the start of `processNonzeroCircuit`, push a bar entry per candidate with `marginal = 2^(k-1)/(2^k − 1)`. While in flight, render an overlay panel near the top of the main view showing each candidate's `P(open)`. On collapse, each bar resolves to 100%/0% with color (cyan/grey), then fades over 400ms.
