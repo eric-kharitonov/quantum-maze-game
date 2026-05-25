@@ -125,28 +125,54 @@ function wallDist(a, b) {
   return Math.abs(ca.r - cb.r) + Math.abs(ca.c - cb.c);
 }
 
+// Helper: return the two cell-keys "r,c" flanking a wall ID.
+function wallFlankCells(id) {
+  const [type, rs, cs] = id.split(':');
+  const r = +rs, c = +cs;
+  if (type === 'H') return [`${r},${c}`, `${r + 1},${c}`];
+  return [`${r},${c}`, `${r},${c + 1}`];
+}
+
 function assignBellPairs() {
-  // Walls touching the start cell (0,0) are ineligible for entanglement —
-  // they're the only path out of (0,0), and Bell measurements collapsing both
-  // to SOLID would orphan the start cell on turn 1.
-  const startCellWalls = new Set([hwallId(0, 0), vwallId(0, 0)]);
+  // v0.3 Bell pair rules:
+  //   R1: at most one Bell-paired wall per cell.
+  //   R2: walls adjacent to (0,0) or the pre-picked exit cell are excluded
+  //       (protects against direct local sealing of either endpoint).
+  //   R3: Manhattan distance between paired walls >= 5.
+  //   R4: only non-border, non-exit interior walls.
+  //   R5: target ~10% pair density (i.e. ~20% of interior walls entangled).
+  if (exitRow === null) {
+    console.warn('assignBellPairs: exitRow not yet picked; skipping');
+    return;
+  }
+  const protectedCells = new Set(['0,0', `${exitRow},${GRID - 1}`]);
+  const cellHasBellWall = new Set();
+
   const eligible = Object.keys(walls).filter(id => {
     const w = walls[id];
     if (w.isBorder || w.isExit) return false;
-    if (startCellWalls.has(id)) return false;
+    const [a, b] = wallFlankCells(id);
+    if (protectedCells.has(a) || protectedCells.has(b)) return false;
     return true;
   });
   shuffle(eligible);
-  // Target ~20% of walls as entangled (i.e. ~10% of walls as pairs).
+
   const targetPairs = Math.floor(eligible.length * 0.10);
   const used = new Set();
   let made = 0;
+
   for (const w of eligible) {
     if (made >= targetPairs) break;
     if (used.has(w)) continue;
+    const [wa, wb] = wallFlankCells(w);
+    // R1: skip if either flanking cell already has a Bell wall.
+    if (cellHasBellWall.has(wa) || cellHasBellWall.has(wb)) continue;
+
     let best = null, bestDist = -1;
     for (const cand of eligible) {
       if (cand === w || used.has(cand)) continue;
+      const [ca, cb] = wallFlankCells(cand);
+      if (cellHasBellWall.has(ca) || cellHasBellWall.has(cb)) continue;
       const d = wallDist(w, cand);
       if (d > bestDist) { best = cand; bestDist = d; }
     }
@@ -156,9 +182,13 @@ function assignBellPairs() {
       walls[best].state = 'ENTANGLED';
       walls[best].bellPartner = w;
       used.add(w); used.add(best);
+      cellHasBellWall.add(wa); cellHasBellWall.add(wb);
+      const [ba, bb] = wallFlankCells(best);
+      cellHasBellWall.add(ba); cellHasBellWall.add(bb);
       made++;
     }
   }
+  console.log(`[Bell] assigned ${made} pair(s), ${cellHasBellWall.size} cells touched`);
 }
 
 // ===== Algorithm =====
@@ -762,11 +792,12 @@ function resetState() {
 async function start() {
   resetState();
   initWalls();
-  assignBellPairs();
-  // 0.2: pre-pick the exit row via a uniform quantum measurement over rows
-  // 0..GRID-1. We reuse the W-state circuit with GRID dummy candidates — the
-  // W-state collapses to exactly one |1⟩ position with uniform probability,
-  // giving us a genuinely quantum row choice.
+  // v0.3: pre-pick the exit row via a uniform quantum measurement over rows
+  // 0..GRID-1. We reuse the W-state circuit with GRID dummy candidates --
+  // the W-state collapses to exactly one |1> position with uniform
+  // probability, giving us a genuinely quantum row choice. Exit row must
+  // be picked BEFORE assignBellPairs so the Bell rules can exclude walls
+  // adjacent to the exit cell.
   inputLocked = true;
   setStatus('Picking exit row…');
   try {
@@ -777,6 +808,7 @@ async function start() {
     exitRow = Math.floor(Math.random() * GRID);
   }
   console.log(`[Q] exit pre-determined: row ${exitRow}`);
+  assignBellPairs();
   setStatus('');
   enterCell({ r: 0, c: 0 });
 }
