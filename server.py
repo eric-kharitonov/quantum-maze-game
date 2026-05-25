@@ -28,35 +28,37 @@ def build_w_state(k):
 
 
 def build_nonzero(k):
-    """Hadamard layer on k qubits: uniform superposition over all 2^k strings.
+    """Prepare the non-zero superposition state on k qubits:
 
-    To produce the non-zero superposition state |ψ> = (1/sqrt(2^k - 1)) *
-    sum_{x != 0} |x>, sample this circuit and reject the all-zero outcome.
-    Use sample_nonzero(k) for the post-selected outcome directly.
+        |psi> = (1/sqrt(2^k - 1)) * sum_{x != 0} |x>
+
+    The all-zero basis state has amplitude exactly 0 — measurement can never
+    produce 00...0. This is a property of the prepared state, not of any
+    post-selection. Qiskit's `initialize` synthesizes the unitary that takes
+    |00...0> to this target statevector.
     """
+    if k < 1:
+        raise ValueError(f"build_nonzero requires k >= 1, got {k}")
+    amplitude = 1.0 / np.sqrt(2**k - 1)
+    target = np.zeros(2**k, dtype=complex)
+    target[1:] = amplitude  # index 0 = |00..0> stays at 0
     qc = QuantumCircuit(k, k)
-    for i in range(k):
-        qc.h(i)
+    qc.initialize(target, range(k))
     qc.measure(range(k), range(k))
     return qc
 
 
-def sample_nonzero(k, max_retries=64):
+def sample_nonzero(k):
     """Sample one outcome from the non-zero superposition state.
 
-    Runs build_nonzero(k) repeatedly, discarding all-zero outcomes. With k
-    qubits, P(all-zero) = 1/2^k so expected retries is 2^k/(2^k - 1) <= 2.
+    A single shot suffices: by construction the prepared state has zero
+    amplitude on |00..0>, so the all-zero outcome is unitarily forbidden —
+    no rejection sampling required.
 
     Returns the bitstring (big-endian: position -(i+1) is qubit i).
-    Raises RuntimeError if max_retries exhausted (should never happen
-    statistically for k >= 1).
     """
     qc = build_nonzero(k)
-    for _ in range(max_retries):
-        bitstring = run_once(qc)
-        if "1" in bitstring:
-            return bitstring
-    raise RuntimeError(f"rejection sampling exhausted for k={k}")
+    return run_once(qc)
 
 
 def build_bell():
@@ -142,10 +144,7 @@ def collapse():
         k = len(candidates)
         if k == 0:
             return jsonify({"error": "no candidates provided"}), 400
-        try:
-            bitstring = sample_nonzero(k)
-        except RuntimeError as e:
-            return jsonify({"error": str(e)}), 500
+        bitstring = sample_nonzero(k)
         # bitstring is big-endian: position -(i+1) corresponds to qubit i.
         outcomes = [int(bitstring[-(i + 1)]) for i in range(k)]
         return jsonify({"outcomes": outcomes})

@@ -1,7 +1,44 @@
 import unittest
 from collections import Counter
 
+from qiskit.quantum_info import Statevector
+
 import server
+
+
+class TestBuildNonzeroStatePrep(unittest.TestCase):
+    """Verify build_nonzero prepares the actual non-zero superposition state.
+
+    The all-zero basis state has amplitude exactly 0 — a property of the
+    prepared quantum state, not of any classical post-selection.
+    """
+
+    def _statevector(self, k):
+        qc = server.build_nonzero(k)
+        qc.remove_final_measurements()
+        return Statevector.from_instruction(qc)
+
+    def test_all_zero_amplitude_is_zero_k1(self):
+        sv = self._statevector(1)
+        self.assertAlmostEqual(abs(sv.data[0]), 0.0, places=10)
+
+    def test_all_zero_amplitude_is_zero_k2(self):
+        sv = self._statevector(2)
+        self.assertAlmostEqual(abs(sv.data[0]), 0.0, places=10)
+
+    def test_all_zero_amplitude_is_zero_k3(self):
+        sv = self._statevector(3)
+        self.assertAlmostEqual(abs(sv.data[0]), 0.0, places=10)
+
+    def test_nonzero_amplitudes_uniform_k3(self):
+        # All 7 non-zero basis states should have equal |amp|^2 = 1/7
+        sv = self._statevector(3)
+        for i in range(1, 2**3):
+            self.assertAlmostEqual(abs(sv.data[i]) ** 2, 1 / 7, places=10)
+
+    def test_rejects_k_below_one(self):
+        with self.assertRaises(ValueError):
+            server.build_nonzero(0)
 
 
 class TestSampleNonzero(unittest.TestCase):

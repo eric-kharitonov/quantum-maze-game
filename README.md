@@ -4,7 +4,7 @@ A browser-based maze game where the maze doesn't exist until you observe it. Eve
 
 ## What's in the game
 
-- **Per-wall non-zero superposition.** When you enter a new cell, the surrounding candidate walls go into a single entangled state `|ψ⟩ = (1/√(2^k − 1)) Σ_{x ≠ 0} |x⟩` and are measured together. The all-`SOLID` outcome has literally zero amplitude — at least one wall *must* open. Quantum mechanics, not a classical fix-up.
+- **Per-wall non-zero superposition.** When you enter a new cell, the surrounding candidate walls go into a single entangled state `|ψ⟩ = (1/√(2^k − 1)) Σ_{x ≠ 0} |x⟩` and are measured together. The state is prepared directly via `qc.initialize` — the all-`SOLID` outcome has amplitude *exactly* 0 by unitary construction, not by post-selection. Quantum mechanics, not a classical fix-up.
 - **Bell-state entanglement.** ~10% of walls are paired at game start under structural constraints (at most one Bell wall per cell, none adjacent to start or exit). When you observe one, its distant partner collapses simultaneously to the same outcome. Pre-collapse, dashed purple threads on the minimap show *exactly which walls are linked*.
 - **CHSH self-test panel.** Below the minimap, an independent stream of Bell measurements at varied angles accumulates the CHSH statistic `S` in the background. Once `S > 2.0` it lights up "Non-locality confirmed" — your game is *proving* its quantum claim live, not just asserting it.
 - **Amplitude-bar overlay.** When the non-zero circuit fires, a small panel briefly shows `P(open)` for each candidate wall before they collapse to OPEN (cyan) or SOLID (grey). The wavefunction is visible for the moment before it isn't.
@@ -74,6 +74,7 @@ console.log(await runE2ESuite(20));
 | **v0.2** | Pre-pick exit row quantumly (uniform random); per-Bell orphan repair. |
 | **v0.3** | Replace W-state with per-wall non-zero superposition entangled circuit. Remove **all** classical override — wall states are now genuinely irreversible. Add minimap click-to-teleport. |
 | **v0.4** | CHSH self-test panel + Bell partner threads on minimap + amplitude bars during measurement. |
+| **v0.4.1** | State-prep honesty: prepare the non-zero state directly via `qc.initialize` instead of Hadamards + classical post-selection. The all-zero amplitude is now exactly 0 by construction. |
 
 Specs and plans live in [`docs/superpowers/`](docs/superpowers/). Architecture notes in [`CLAUDE.md`](CLAUDE.md).
 
