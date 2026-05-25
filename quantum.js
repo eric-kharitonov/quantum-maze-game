@@ -27,4 +27,16 @@ async function nonzero(cell, candidates) {
   return data.outcomes;
 }
 
-window.Quantum = { wState, bell, nonzero };
+// v0.4: CHSH measurement. Prepares a Bell pair, rotates Alice's and Bob's
+// qubits to the specified measurement axes (in degrees), measures both,
+// returns {a, b}.
+async function chsh(aliceAngleDeg, bobAngleDeg) {
+  const data = await postCollapse({
+    type: 'chsh',
+    alice_angle_deg: aliceAngleDeg,
+    bob_angle_deg: bobAngleDeg,
+  });
+  return { a: data.a, b: data.b };
+}
+
+window.Quantum = { wState, bell, nonzero, chsh };

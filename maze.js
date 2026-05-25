@@ -81,6 +81,16 @@ let pulsePhase = 0;
 let exitOpenedRow = null;
 let exitRow = null;  // 0.2: pre-determined at start() via uniform quantum pick
 
+// v0.4: CHSH self-test state. Tallies per (x, y) input pair.
+const chshTally = {
+  trials: 0,
+  // counts[x][y] = { same: n, diff: n }
+  counts: [[{same:0, diff:0}, {same:0, diff:0}], [{same:0, diff:0}, {same:0, diff:0}]],
+};
+let chshSessionId = 0;          // increment on each start() to cancel old loops
+let chshRunning = false;
+let amplitudeBars = [];          // { wallId, marginal, t, lifetime, collapsed }
+
 // ===== Init =====
 function initWalls() {
   // Horizontal walls
@@ -740,10 +750,62 @@ function updateStats() {
   document.getElementById('s-bell').textContent = stats.bellFlashes;
 }
 
+// v0.4: render the CHSH self-test panel based on chshTally.
+const CHSH_TSIRELSON = 2 * Math.sqrt(2);  // ~ 2.828
+const chshCanvas = document.getElementById('chsh-bar');
+const chshCtx = chshCanvas ? chshCanvas.getContext('2d') : null;
+const chshPanel = document.getElementById('chsh-panel');
+
+function drawChshPanel() {
+  if (!chshCtx || !chshPanel) return;
+  const trialsEl = document.getElementById('chsh-trials');
+  const sEl = document.getElementById('chsh-s');
+  const statusEl = document.getElementById('chsh-status');
+  trialsEl.textContent = chshTally.trials;
+  const S = computeChshS();
+  const showS = (S !== null && chshTally.trials >= 30);
+  sEl.textContent = showS ? S.toFixed(3) : '—';
+  // Bar
+  const w = chshCanvas.width, h = chshCanvas.height;
+  chshCtx.clearRect(0, 0, w, h);
+  // background track
+  chshCtx.fillStyle = '#1a1a2e';
+  chshCtx.fillRect(0, 0, w, h);
+  // classical-max tick line
+  const tickX = (2.0 / CHSH_TSIRELSON) * w;
+  chshCtx.strokeStyle = '#555';
+  chshCtx.lineWidth = 1;
+  chshCtx.setLineDash([2, 2]);
+  chshCtx.beginPath();
+  chshCtx.moveTo(tickX, 0);
+  chshCtx.lineTo(tickX, h);
+  chshCtx.stroke();
+  chshCtx.setLineDash([]);
+  // current S bar
+  if (S !== null) {
+    const sClamp = Math.max(0, Math.min(S, CHSH_TSIRELSON));
+    const fillW = (sClamp / CHSH_TSIRELSON) * w;
+    chshCtx.fillStyle = S >= 2.0 ? '#4dffdd' : '#ffb84d';
+    chshCtx.fillRect(0, 0, fillW, h);
+  }
+  // Status text + class
+  if (!showS) {
+    statusEl.textContent = 'Accumulating measurements…';
+    chshPanel.classList.remove('confirmed');
+  } else if (S >= 2.0) {
+    statusEl.textContent = '★ Non-locality confirmed (S > 2)';
+    chshPanel.classList.add('confirmed');
+  } else {
+    statusEl.textContent = 'Below classical bound — keep playing';
+    chshPanel.classList.remove('confirmed');
+  }
+}
+
 function render() {
   drawMain();
   drawMini();
   updateStats();
+  drawChshPanel();
 }
 
 function setStatus(msg) {
@@ -776,6 +838,7 @@ function resetState() {
   }
   for (const id in walls) delete walls[id];
   flashes.length = 0;
+  amplitudeBars.length = 0;
   player.r = 0;
   player.c = 0;
   player.facing = 'E';
@@ -786,7 +849,58 @@ function resetState() {
   gameOver = false;
   exitOpenedRow = null;
   exitRow = null;
+  // Reset CHSH tally for the new game.
+  chshTally.trials = 0;
+  for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
+    chshTally.counts[x][y].same = 0;
+    chshTally.counts[x][y].diff = 0;
+  }
   setStatus('');
+}
+
+// v0.4: CHSH self-test loop. Runs in the background while the player plays,
+// firing one Bell-pair trial every ~2 seconds with random (x, y) inputs and
+// the canonical CHSH angles. Tallies wins/losses into chshTally; the panel
+// renders this on every frame. Self-cancels when chshSessionId changes
+// (i.e. when the game restarts).
+async function chshLoop(mySession) {
+  chshRunning = true;
+  // Brief delay before first trial so the start-time exitRow pick goes first.
+  await sleep(1500);
+  while (mySession === chshSessionId) {
+    if (gameOver) { chshRunning = false; return; }
+    const x = Math.random() < 0.5 ? 0 : 1;
+    const y = Math.random() < 0.5 ? 0 : 1;
+    const aliceAngle = x === 0 ? 0.0 : 45.0;
+    const bobAngle = y === 0 ? 22.5 : -22.5;
+    try {
+      const { a, b } = await Quantum.chsh(aliceAngle, bobAngle);
+      if (mySession !== chshSessionId) return;
+      const c = chshTally.counts[x][y];
+      if (a === b) c.same++;
+      else c.diff++;
+      chshTally.trials++;
+    } catch (e) {
+      console.warn('CHSH trial failed; retrying in 10s', e);
+      await sleep(10000);
+      continue;
+    }
+    await sleep(2000);
+  }
+  chshRunning = false;
+}
+
+// Compute the running CHSH S = E(0,0) + E(0,1) + E(1,0) - E(1,1).
+// E(x,y) = (same - diff) / (same + diff). Returns null if not enough data.
+function computeChshS() {
+  if (chshTally.trials < 4) return null;
+  const e = (x, y) => {
+    const c = chshTally.counts[x][y];
+    const total = c.same + c.diff;
+    if (total === 0) return 0;
+    return (c.same - c.diff) / total;
+  };
+  return e(0, 0) + e(0, 1) + e(1, 0) - e(1, 1);
 }
 
 async function start() {
@@ -810,6 +924,9 @@ async function start() {
   console.log(`[Q] exit pre-determined: row ${exitRow}`);
   assignBellPairs();
   setStatus('');
+  // v0.4: kick off the CHSH self-test loop for this game session.
+  chshSessionId++;
+  chshLoop(chshSessionId);
   enterCell({ r: 0, c: 0 });
 }
 
