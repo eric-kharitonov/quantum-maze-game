@@ -813,6 +813,23 @@ async function start() {
   enterCell({ r: 0, c: 0 });
 }
 
+// v0.3: minimap click-to-teleport. Clicking a visited cell jumps the player
+// there. Pure UX -- no measurements fire. Replaces the auto-backtrack
+// teleport that was removed when the DFS stack went away.
+miniCanvas.addEventListener('click', (e) => {
+  if (inputLocked || gameOver) return;
+  const rect = miniCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const c = Math.floor(x / MINI);
+  const r = Math.floor(y / MINI);
+  if (r < 0 || r >= GRID || c < 0 || c >= GRID) return;
+  if (!cells[r][c].visited) return;
+  player.r = r;
+  player.c = c;
+  render();
+});
+
 document.addEventListener('keydown', handleKey);
 document.getElementById('restart').addEventListener('click', () => {
   if (inputLocked) return;
