@@ -281,6 +281,15 @@ async function processNonzeroCircuit(cell, candidates) {
     return [t.r, t.c];
   });
   for (const id of candIds) walls[id].pending = true;
+  // v0.4: spawn amplitude bars for each candidate. Marginal P(open) for the
+  // non-zero superposition state is 2^(k-1) / (2^k - 1).
+  const k = candidates.length;
+  const marginal = Math.pow(2, k - 1) / (Math.pow(2, k) - 1);
+  const barLifetime = 1200; // ms; ample time to see them pre-collapse
+  const bornAt = performance.now();
+  for (const id of candIds) {
+    amplitudeBars.push({ wallId: id, marginal, bornAt, lifetime: barLifetime, collapsedAt: null });
+  }
   render();
 
   let outcomes;
@@ -289,6 +298,10 @@ async function processNonzeroCircuit(cell, candidates) {
   } catch (e) {
     console.error('Non-zero circuit call failed', e);
     for (const id of candIds) walls[id].pending = false;
+    // Cancel bars
+    for (const bar of amplitudeBars) {
+      if (candIds.includes(bar.wallId)) bar.collapsedAt = performance.now();
+    }
     return [];
   }
 
@@ -300,7 +313,14 @@ async function processNonzeroCircuit(cell, candidates) {
     stats.wallsCollapsed++;
     if (outcomes[i] === 1) opened.push(candidates[i]);
   }
-  console.log(`[Q] cell (${cell.r},${cell.c}) k=${candidates.length} -> outcomes [${outcomes.join(',')}], opened: ${opened.join(',') || '(none - bug)'}`);
+  // Stamp collapse time onto the bars; the frame loop will fade them out.
+  const now = performance.now();
+  for (const bar of amplitudeBars) {
+    if (candIds.includes(bar.wallId) && bar.collapsedAt === null) {
+      bar.collapsedAt = now;
+    }
+  }
+  console.log(`[Q] cell (${cell.r},${cell.c}) k=${k} marginal=${(marginal*100).toFixed(0)}% -> outcomes [${outcomes.join(',')}], opened: ${opened.join(',') || '(none - bug)'}`);
   return opened;
 }
 
@@ -710,6 +730,11 @@ function drawMain() {
     drawSurface(ctx, [[f.l, f.t], [f.r, f.t], [f.r, f.b], [f.l, f.b]], blocker.state, blocker.pending);
   }
 
+  // v0.4: amplitude-bar overlay panel. Shows P(open) for each candidate wall
+  // currently in the non-zero superposition, with a labeled bar per direction.
+  // Renders only while at least one bar is alive; fades out after collapse.
+  drawAmplitudeOverlay(ctx);
+
   // Compass overlay: facing letter top-center, position bottom-left.
   ctx.save();
   ctx.font = 'bold 14px ui-monospace, monospace';
@@ -724,6 +749,103 @@ function drawMain() {
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(170, 170, 200, 0.7)';
   ctx.fillText(`(${player.r},${player.c})`, 10, mainCanvas.height - 22);
+  ctx.restore();
+}
+
+// v0.4: draw an amplitude-bar overlay near the top of the main view while
+// at least one wall is being measured by the non-zero circuit. Each bar
+// shows P(open) for one candidate wall, labeled by side (N/E/S/W). After
+// collapse, each bar shrinks/jumps to its outcome (100% if OPEN, 0% if
+// SOLID) and fades out.
+function drawAmplitudeOverlay(ctx) {
+  if (amplitudeBars.length === 0) return;
+  const now = performance.now();
+  // Group bars by (cell, wallId). We only show bars whose wall is adjacent
+  // to the player's current cell (i.e. the cell we just entered).
+  const visible = amplitudeBars.filter(bar => {
+    const sides = cellWalls(player.r, player.c);
+    for (const side of ['N','E','S','W']) {
+      if (sides[side] === bar.wallId) return true;
+    }
+    return false;
+  });
+  if (visible.length === 0) return;
+
+  // Card layout: top center, semi-transparent dark background.
+  const padX = 10, padY = 6;
+  const lineH = 14;
+  const cardW = 200;
+  const cardH = padY * 2 + 16 + visible.length * lineH;
+  const cx = (mainCanvas.width - cardW) / 2;
+  const cy = 36;
+
+  // Overall opacity: 1 while not all bars have collapsed, fading after.
+  let overlayAlpha = 1;
+  if (visible.every(b => b.collapsedAt !== null)) {
+    const collapsedAge = now - Math.min(...visible.map(b => b.collapsedAt));
+    overlayAlpha = Math.max(0, 1 - collapsedAge / 400);
+    if (overlayAlpha <= 0) {
+      // Prune fully-faded bars.
+      for (let i = amplitudeBars.length - 1; i >= 0; i--) {
+        if (visible.includes(amplitudeBars[i])) amplitudeBars.splice(i, 1);
+      }
+      return;
+    }
+  }
+
+  ctx.save();
+  ctx.globalAlpha = overlayAlpha;
+  // Background
+  ctx.fillStyle = 'rgba(10, 10, 20, 0.85)';
+  ctx.fillRect(cx, cy, cardW, cardH);
+  ctx.strokeStyle = 'rgba(77, 255, 221, 0.4)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx, cy, cardW, cardH);
+
+  // Title
+  ctx.fillStyle = '#4dffdd';
+  ctx.font = 'bold 11px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const k = visible.length;
+  ctx.fillText(`MEASURING k=${k}  P(open) = ${(visible[0].marginal * 100).toFixed(0)}%`, cx + cardW / 2, cy + padY);
+
+  // Per-wall bars
+  const sides = cellWalls(player.r, player.c);
+  ctx.textAlign = 'left';
+  ctx.font = '10px ui-monospace, monospace';
+  let row = 0;
+  for (const side of ['N','E','S','W']) {
+    const wallId = sides[side];
+    const bar = visible.find(b => b.wallId === wallId);
+    if (!bar) continue;
+    const y = cy + padY + 18 + row * lineH;
+    const labelX = cx + padX;
+    const barX = cx + padX + 28;
+    const barW = cardW - padX * 2 - 28 - 32;
+    // Label
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(side, labelX, y + 2);
+    // Bar background
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(barX, y, barW, 8);
+    // Fill: marginal pre-collapse; outcome post-collapse.
+    let fill = bar.marginal;
+    let color = '#ffb84d';
+    if (bar.collapsedAt !== null) {
+      const w = walls[bar.wallId];
+      fill = w.state === 'OPEN' ? 1 : 0;
+      color = w.state === 'OPEN' ? '#4dffdd' : '#5a5a78';
+    }
+    ctx.fillStyle = color;
+    ctx.fillRect(barX, y, barW * fill, 8);
+    // Percentage text
+    ctx.fillStyle = '#888';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${(fill * 100).toFixed(0)}%`, cx + cardW - padX, y + 2);
+    ctx.textAlign = 'left';
+    row++;
+  }
   ctx.restore();
 }
 
