@@ -82,8 +82,10 @@ let exitOpenedRow = null;
 let exitRow = null;  // 0.2: pre-determined at start() via uniform quantum pick
 
 // v0.4: CHSH self-test state. Tallies per (x, y) input pair.
+// v0.4.2: now also fed by the maze's own Bell observations (gameplayTrials).
 const chshTally = {
-  trials: 0,
+  trials: 0,           // total trials (background + gameplay)
+  gameplayTrials: 0,   // subset contributed by maze Bell observations
   // counts[x][y] = { same: n, diff: n }
   counts: [[{same:0, diff:0}, {same:0, diff:0}], [{same:0, diff:0}, {same:0, diff:0}]],
 };
@@ -243,9 +245,22 @@ async function processBell(cell) {
       partner.state = remote;
       partner.pending = false;
       stats.wallsCollapsed++;
-      flashes.push({ kind: 'bell', wallId: w.bellPartner, t: 0, lifetime: 1400 });
+      const mismatch = result.a !== result.b;
+      flashes.push({
+        kind: mismatch ? 'bellMismatch' : 'bell',
+        wallId: w.bellPartner,
+        localWallId: id,
+        t: 0,
+        lifetime: 1400,
+      });
       stats.bellFlashes++;
     }
+    // v0.4.2: contribute this Bell observation to the CHSH tally.
+    const c = chshTally.counts[x][y];
+    if (result.a === result.b) c.same++;
+    else c.diff++;
+    chshTally.trials++;
+    chshTally.gameplayTrials++;
     // v0.3: no classical override. Orphans (if any) are detected in
     // enterCell via checkExitSealed and the game ends honestly.
   }
@@ -1013,6 +1028,7 @@ function resetState() {
   exitRow = null;
   // Reset CHSH tally for the new game.
   chshTally.trials = 0;
+  chshTally.gameplayTrials = 0;
   for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
     chshTally.counts[x][y].same = 0;
     chshTally.counts[x][y].diff = 0;
