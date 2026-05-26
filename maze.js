@@ -939,6 +939,8 @@ function drawChshPanel() {
   const sEl = document.getElementById('chsh-s');
   const statusEl = document.getElementById('chsh-status');
   trialsEl.textContent = chshTally.trials;
+  const gameplayEl = document.getElementById('chsh-gameplay');
+  if (gameplayEl) gameplayEl.textContent = chshTally.gameplayTrials;
   const S = computeChshS();
   const showS = (S !== null && chshTally.trials >= 30);
   sEl.textContent = showS ? S.toFixed(3) : '—';
