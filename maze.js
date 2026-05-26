@@ -590,6 +590,39 @@ function drawFlash(ctx, f, size) {
     ctx.fillStyle = `rgba(179, 102, 255, ${alpha * 0.35})`;
     ctx.fill();
   }
+  if (f.kind === 'bellMismatch') {
+    // v0.4.2: partners disagreed (one OPEN, one SOLID). Draw a two-color split
+    // pulse — cyan + amber halves — so the non-classical disagreement is
+    // visible at a glance, distinct from the matched-pair purple pulse.
+    const wc = wallCenter(f.wallId);
+    const x = wc.c * size;
+    const y = wc.r * size;
+    const rOuter = size * (0.5 + p * 1.3);
+    const rInner = size * (0.2 + p * 0.5);
+    // Outer ring: stroked split semicircles.
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgba(77, 255, 221, ${alpha * 0.9})`;
+    ctx.beginPath();
+    ctx.arc(x, y, rOuter, -Math.PI / 2, Math.PI / 2);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255, 184, 77, ${alpha * 0.9})`;
+    ctx.beginPath();
+    ctx.arc(x, y, rOuter, Math.PI / 2, 3 * Math.PI / 2);
+    ctx.stroke();
+    // Inner filled split disc.
+    ctx.fillStyle = `rgba(77, 255, 221, ${alpha * 0.4})`;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.arc(x, y, rInner, -Math.PI / 2, Math.PI / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = `rgba(255, 184, 77, ${alpha * 0.4})`;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.arc(x, y, rInner, Math.PI / 2, 3 * Math.PI / 2);
+    ctx.closePath();
+    ctx.fill();
+  }
   if (f.kind === 'teleport') {
     const x = f.c * size + size / 2;
     const y = f.r * size + size / 2;
@@ -917,7 +950,7 @@ function drawMini() {
   // flashes, and the player dot sit on top).
   drawBellThreads(ctx, MINI);
   for (const id in walls) drawWall(ctx, id, MINI, true);
-  for (const f of flashes) if (f.kind === 'bell') drawFlash(ctx, f, MINI);
+  for (const f of flashes) if (f.kind === 'bell' || f.kind === 'bellMismatch') drawFlash(ctx, f, MINI);
   drawPlayer(ctx, MINI);
 }
 
