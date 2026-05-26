@@ -211,11 +211,20 @@ async function processBell(cell) {
     w.pending = true;
     render();
     let result;
+    // v0.4.2: pick CHSH angles uniformly per observation. The maze's Bell
+    // pairs now measure at varied bases, so cross-basis correlations show up
+    // in gameplay (and feed the CHSH tally).
+    const x = Math.random() < 0.5 ? 0 : 1;
+    const y = Math.random() < 0.5 ? 0 : 1;
+    const aliceAngle = x === 0 ? 0.0 : 45.0;
+    const bobAngle = y === 0 ? 22.5 : -22.5;
     try {
       const partnerCenter = wallCenter(w.bellPartner);
       result = await Quantum.bell(
         [cell.r, cell.c],
-        [Math.floor(partnerCenter.r), Math.floor(partnerCenter.c)]
+        [Math.floor(partnerCenter.r), Math.floor(partnerCenter.c)],
+        aliceAngle,
+        bobAngle
       );
     } catch (e) {
       console.error('Bell call failed', e);
