@@ -108,24 +108,15 @@ function reachableFromStart() {
 /** Run the suite of N games and return aggregated invariant data. */
 window.runE2ESuite = async function runE2ESuite(n = 20) {
   const games = [];
-  // v0.4.2: track Bell partner-disagree rate across the whole suite.
-  // chshTally.gameplayTrials counts only maze Bell observations, but
-  // chshTally.counts[x][y].diff is written by BOTH the background CHSH loop
-  // AND the gameplay observations (they share the same counts buckets).
-  // So totalDiff / totalGameplayTrials is biased upward — the background loop
-  // contributes its own diffs but not its trials to the denominator. The
-  // loose [0.10, 0.60] bounds are wide enough to absorb this bias; for tight
-  // bounds we'd need a separate gameplay-only diff counter in maze.js.
+  // v0.4.2: track Bell partner-disagree rate across the whole suite. We use
+  // chshTally.gameplayDiffs (gameplay-only) to avoid background-loop contamination.
   let totalGameplayTrials = 0;
-  let totalDiff = 0;
+  let totalGameplayDiffs = 0;
   for (let i = 0; i < n; i++) {
-    // Snapshot chshTally counters before the game so we attribute deltas
-    // (gameplay + background) accumulated during THIS game only.
+    // Snapshot gameplay-only counters before the game so we attribute deltas
+    // accumulated during THIS game only.
     const prevGameplayTrials = chshTally.gameplayTrials;
-    let prevDiff = 0;
-    for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
-      prevDiff += chshTally.counts[x][y].diff;
-    }
+    const prevGameplayDiffs = chshTally.gameplayDiffs;
     const { startExitRow, gameOver: sealed, exitOpenedRow: opened } = await autoPlayOneGame();
     const counts = countState();
     const reach = reachableFromStart();
@@ -137,13 +128,9 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
     // Invariant 3: no SUPERPOSED walls between visited cells (loop prev).
     // (Skipped: would require iterating all wall IDs; we check totals.)
     const gameplayTrialsDelta = chshTally.gameplayTrials - prevGameplayTrials;
-    let postDiff = 0;
-    for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
-      postDiff += chshTally.counts[x][y].diff;
-    }
-    const diffDelta = postDiff - prevDiff;
+    const diffDelta = chshTally.gameplayDiffs - prevGameplayDiffs;
     totalGameplayTrials += gameplayTrialsDelta;
-    totalDiff += diffDelta;
+    totalGameplayDiffs += diffDelta;
     games.push({
       i, exitRow: startExitRow, sealed, exitOpened: opened !== null,
       openExits, exitMatchesPick,
@@ -168,11 +155,11 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
       actual: `only ${totalGameplayTrials} gameplay trials, skipping`,
     };
   } else {
-    const rate = totalDiff / totalGameplayTrials;
+    const rate = totalGameplayDiffs / totalGameplayTrials;
     disagreeAssertion = {
       name: 'partner_disagree_rate_in_bounds',
       pass: rate >= 0.10 && rate <= 0.60,
-      actual: `disagree rate = ${rate.toFixed(2)} over ${totalGameplayTrials} gameplay trials (incl. background-loop diffs in numerator)`,
+      actual: `disagree rate = ${rate.toFixed(2)} over ${totalGameplayTrials} gameplay trials`,
     };
   }
   // Spec acceptance criteria:
@@ -187,7 +174,7 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
   return {
     n, sealedCount, wonCount, avgVisited,
     exitRowsUsed: [...exitRowsUsed].sort((a, b) => a - b),
-    totalGameplayTrials, totalDiff,
+    totalGameplayTrials, totalGameplayDiffs,
     assertions,
     allPass: assertions.every(a => a.pass),
     games,

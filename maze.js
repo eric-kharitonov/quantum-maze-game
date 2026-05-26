@@ -86,6 +86,8 @@ let exitRow = null;  // 0.2: pre-determined at start() via uniform quantum pick
 const chshTally = {
   trials: 0,           // total trials (background + gameplay)
   gameplayTrials: 0,   // subset contributed by maze Bell observations
+  gameplaySame: 0,     // gameplay-only agreements (unbiased by background loop)
+  gameplayDiffs: 0,    // gameplay-only disagreements (unbiased by background loop)
   // counts[x][y] = { same: n, diff: n }
   counts: [[{same:0, diff:0}, {same:0, diff:0}], [{same:0, diff:0}, {same:0, diff:0}]],
 };
@@ -257,8 +259,13 @@ async function processBell(cell) {
     }
     // v0.4.2: contribute this Bell observation to the CHSH tally.
     const c = chshTally.counts[x][y];
-    if (result.a === result.b) c.same++;
-    else c.diff++;
+    if (result.a === result.b) {
+      c.same++;
+      chshTally.gameplaySame++;
+    } else {
+      c.diff++;
+      chshTally.gameplayDiffs++;
+    }
     chshTally.trials++;
     chshTally.gameplayTrials++;
     // v0.3: no classical override. Orphans (if any) are detected in
@@ -1064,6 +1071,8 @@ function resetState() {
   // Reset CHSH tally for the new game.
   chshTally.trials = 0;
   chshTally.gameplayTrials = 0;
+  chshTally.gameplaySame = 0;
+  chshTally.gameplayDiffs = 0;
   for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
     chshTally.counts[x][y].same = 0;
     chshTally.counts[x][y].diff = 0;
