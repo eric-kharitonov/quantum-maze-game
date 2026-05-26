@@ -1,3 +1,4 @@
+import math
 import unittest
 from collections import Counter
 
@@ -80,6 +81,43 @@ class TestSampleNonzero(unittest.TestCase):
         for ones in per_qubit_ones:
             # within ~6% absolute of expected 8/15
             self.assertAlmostEqual(ones / n, 8 / 15, delta=0.06)
+
+
+class TestBellCorrelation(unittest.TestCase):
+    """Verify build_bell at varied angles produces correlations matching
+    cos(2*(alice_rad - bob_rad)), the |Phi+> prediction."""
+
+    def _correlation(self, alice_deg, bob_deg, n=2000):
+        alice_rad = math.radians(alice_deg)
+        bob_rad = math.radians(bob_deg)
+        same = 0
+        for _ in range(n):
+            qc = server.build_bell(alice_rad, bob_rad)
+            bitstring = server.run_once(qc)
+            a = int(bitstring[1])
+            b = int(bitstring[0])
+            if a == b:
+                same += 1
+        return 2 * (same / n) - 1  # E in [-1, 1]
+
+    def test_zero_angle_perfectly_correlated(self):
+        e = self._correlation(0.0, 0.0)
+        self.assertGreater(e, 0.95)
+
+    def test_45_degrees_uncorrelated(self):
+        # cos(2 * pi/4) = 0
+        e = self._correlation(0.0, 45.0)
+        self.assertAlmostEqual(e, 0.0, delta=0.10)
+
+    def test_90_degrees_anticorrelated(self):
+        # cos(2 * pi/2) = -1
+        e = self._correlation(0.0, 90.0)
+        self.assertLess(e, -0.95)
+
+    def test_chsh_angle_22_5_matches_cos45(self):
+        # cos(2 * pi/8) = cos(pi/4) = 1/sqrt(2) ~ 0.707
+        e = self._correlation(0.0, 22.5)
+        self.assertAlmostEqual(e, math.cos(math.pi / 4), delta=0.10)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ BOB_ANGLES = [22.5, -22.5]   # for y = 0, 1
 
 def _correlation(x_idx, y_idx, shots):
     """E(x, y) over `shots` trials."""
-    qc = server.build_chsh(
+    qc = server.build_bell(
         np.deg2rad(ALICE_ANGLES[x_idx]),
         np.deg2rad(BOB_ANGLES[y_idx]),
     )
