@@ -82,8 +82,12 @@ let exitOpenedRow = null;
 let exitRow = null;  // 0.2: pre-determined at start() via uniform quantum pick
 
 // v0.4: CHSH self-test state. Tallies per (x, y) input pair.
+// v0.4.2: now also fed by the maze's own Bell observations (gameplayTrials).
 const chshTally = {
-  trials: 0,
+  trials: 0,           // total trials (background + gameplay)
+  gameplayTrials: 0,   // subset contributed by maze Bell observations
+  gameplaySame: 0,     // gameplay-only agreements (unbiased by background loop)
+  gameplayDiffs: 0,    // gameplay-only disagreements (unbiased by background loop)
   // counts[x][y] = { same: n, diff: n }
   counts: [[{same:0, diff:0}, {same:0, diff:0}], [{same:0, diff:0}, {same:0, diff:0}]],
 };
@@ -211,11 +215,20 @@ async function processBell(cell) {
     w.pending = true;
     render();
     let result;
+    // v0.4.2: pick CHSH angles uniformly per observation. The maze's Bell
+    // pairs now measure at varied bases, so cross-basis correlations show up
+    // in gameplay (and feed the CHSH tally).
+    const x = Math.random() < 0.5 ? 0 : 1;
+    const y = Math.random() < 0.5 ? 0 : 1;
+    const aliceAngle = x === 0 ? 0.0 : 45.0;
+    const bobAngle = y === 0 ? 22.5 : -22.5;
     try {
       const partnerCenter = wallCenter(w.bellPartner);
       result = await Quantum.bell(
         [cell.r, cell.c],
-        [Math.floor(partnerCenter.r), Math.floor(partnerCenter.c)]
+        [Math.floor(partnerCenter.r), Math.floor(partnerCenter.c)],
+        aliceAngle,
+        bobAngle
       );
     } catch (e) {
       console.error('Bell call failed', e);
@@ -234,9 +247,27 @@ async function processBell(cell) {
       partner.state = remote;
       partner.pending = false;
       stats.wallsCollapsed++;
-      flashes.push({ kind: 'bell', wallId: w.bellPartner, t: 0, lifetime: 1400 });
+      const mismatch = result.a !== result.b;
+      flashes.push({
+        kind: mismatch ? 'bellMismatch' : 'bell',
+        wallId: w.bellPartner,
+        localWallId: id,
+        t: 0,
+        lifetime: 1400,
+      });
       stats.bellFlashes++;
     }
+    // v0.4.2: contribute this Bell observation to the CHSH tally.
+    const c = chshTally.counts[x][y];
+    if (result.a === result.b) {
+      c.same++;
+      chshTally.gameplaySame++;
+    } else {
+      c.diff++;
+      chshTally.gameplayDiffs++;
+    }
+    chshTally.trials++;
+    chshTally.gameplayTrials++;
     // v0.3: no classical override. Orphans (if any) are detected in
     // enterCell via checkExitSealed and the game ends honestly.
   }
@@ -566,6 +597,39 @@ function drawFlash(ctx, f, size) {
     ctx.fillStyle = `rgba(179, 102, 255, ${alpha * 0.35})`;
     ctx.fill();
   }
+  if (f.kind === 'bellMismatch') {
+    // v0.4.2: partners disagreed (one OPEN, one SOLID). Draw a two-color split
+    // pulse — cyan + amber halves — so the non-classical disagreement is
+    // visible at a glance, distinct from the matched-pair purple pulse.
+    const wc = wallCenter(f.wallId);
+    const x = wc.c * size;
+    const y = wc.r * size;
+    const rOuter = size * (0.5 + p * 1.3);
+    const rInner = size * (0.2 + p * 0.5);
+    // Outer ring: stroked split semicircles.
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgba(77, 255, 221, ${alpha * 0.9})`;
+    ctx.beginPath();
+    ctx.arc(x, y, rOuter, -Math.PI / 2, Math.PI / 2);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(255, 184, 77, ${alpha * 0.9})`;
+    ctx.beginPath();
+    ctx.arc(x, y, rOuter, Math.PI / 2, 3 * Math.PI / 2);
+    ctx.stroke();
+    // Inner filled split disc.
+    ctx.fillStyle = `rgba(77, 255, 221, ${alpha * 0.4})`;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.arc(x, y, rInner, -Math.PI / 2, Math.PI / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = `rgba(255, 184, 77, ${alpha * 0.4})`;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.arc(x, y, rInner, Math.PI / 2, 3 * Math.PI / 2);
+    ctx.closePath();
+    ctx.fill();
+  }
   if (f.kind === 'teleport') {
     const x = f.c * size + size / 2;
     const y = f.r * size + size / 2;
@@ -893,7 +957,7 @@ function drawMini() {
   // flashes, and the player dot sit on top).
   drawBellThreads(ctx, MINI);
   for (const id in walls) drawWall(ctx, id, MINI, true);
-  for (const f of flashes) if (f.kind === 'bell') drawFlash(ctx, f, MINI);
+  for (const f of flashes) if (f.kind === 'bell' || f.kind === 'bellMismatch') drawFlash(ctx, f, MINI);
   drawPlayer(ctx, MINI);
 }
 
@@ -915,6 +979,8 @@ function drawChshPanel() {
   const sEl = document.getElementById('chsh-s');
   const statusEl = document.getElementById('chsh-status');
   trialsEl.textContent = chshTally.trials;
+  const gameplayEl = document.getElementById('chsh-gameplay');
+  if (gameplayEl) gameplayEl.textContent = chshTally.gameplayTrials;
   const S = computeChshS();
   const showS = (S !== null && chshTally.trials >= 30);
   sEl.textContent = showS ? S.toFixed(3) : '—';
@@ -1004,6 +1070,9 @@ function resetState() {
   exitRow = null;
   // Reset CHSH tally for the new game.
   chshTally.trials = 0;
+  chshTally.gameplayTrials = 0;
+  chshTally.gameplaySame = 0;
+  chshTally.gameplayDiffs = 0;
   for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
     chshTally.counts[x][y].same = 0;
     chshTally.counts[x][y].diff = 0;

@@ -61,33 +61,26 @@ def sample_nonzero(k):
     return run_once(qc)
 
 
-def build_bell():
-    """Standard Bell state |Φ+⟩ = (|00⟩ + |11⟩)/√2."""
-    qc = QuantumCircuit(2, 2)
-    qc.h(0)
-    qc.cx(0, 1)
-    qc.measure([0, 1], [0, 1])
-    return qc
+def build_bell(alice_rad=0.0, bob_rad=0.0):
+    """Bell state |Phi+> = (|00> + |11>)/sqrt(2), measured along requested axes.
 
+    With both angles 0, this is the standard Z-basis Bell measurement: outcomes
+    always match, giving classical-equivalent perfect correlation. With varied
+    angles, the correlation is E(a, b) = cos(2*(a - b)) - the quantum signature
+    that violates Bell's inequality.
 
-def build_chsh(alice_angle_rad, bob_angle_rad):
-    """Bell pair measured along requested axes. Used for the CHSH inequality
-    test: with alice_angle in {0, pi/4} and bob_angle in {pi/8, -pi/8},
-    repeated trials produce S = 2*sqrt(2) ~ 2.828, violating the classical
-    bound |S| <= 2.
-
-    The factor of 2 in RY(-2*angle) comes from the half-angle representation
-    of Bloch sphere rotations: RY(theta) rotates the state vector by theta/2
-    on the sphere, so to rotate the measurement axis by `angle`, we apply
-    RY(-2*angle) before the standard Z-basis measurement.
+    The factor of 2 in RY(-2*angle) comes from the half-angle representation of
+    Bloch sphere rotations: RY(theta) rotates by theta/2 on the sphere, so to
+    rotate the measurement axis by `angle`, we apply RY(-2*angle) before the
+    standard Z-basis measurement.
     """
     qc = QuantumCircuit(2, 2)
-    # Prepare |Phi+>:
     qc.h(0)
     qc.cx(0, 1)
-    # Rotate each qubit so the measurement axis aligns with the requested angle.
-    qc.ry(-2 * alice_angle_rad, 0)
-    qc.ry(-2 * bob_angle_rad, 1)
+    if alice_rad != 0.0:
+        qc.ry(-2 * alice_rad, 0)
+    if bob_rad != 0.0:
+        qc.ry(-2 * bob_rad, 1)
     qc.measure([0, 1], [0, 1])
     return qc
 
@@ -116,23 +109,13 @@ def collapse():
         chosen = bitstring[::-1].index("1")
         return jsonify({"chosen": chosen})
 
-    elif circuit_type == "bell":
-        qc = build_bell()
-        bitstring = run_once(qc)
-        # bitstring is "q1q0" → bitstring[1]=q0, bitstring[0]=q1
-        a = int(bitstring[1])
-        b = int(bitstring[0])
-        return jsonify({"a": a, "b": b})
-
-    elif circuit_type == "chsh":
+    elif circuit_type in ("bell", "chsh"):
         try:
             alice_deg = float(data.get("alice_angle_deg", 0.0))
             bob_deg = float(data.get("bob_angle_deg", 0.0))
         except (TypeError, ValueError):
             return jsonify({"error": "alice_angle_deg/bob_angle_deg must be numbers"}), 400
-        alice_rad = np.deg2rad(alice_deg)
-        bob_rad = np.deg2rad(bob_deg)
-        qc = build_chsh(alice_rad, bob_rad)
+        qc = build_bell(np.deg2rad(alice_deg), np.deg2rad(bob_deg))
         bitstring = run_once(qc)
         # bitstring is "q1q0" -> bitstring[1] = q0 = Alice's outcome.
         a = int(bitstring[1])

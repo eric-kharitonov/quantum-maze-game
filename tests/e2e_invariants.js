@@ -108,7 +108,15 @@ function reachableFromStart() {
 /** Run the suite of N games and return aggregated invariant data. */
 window.runE2ESuite = async function runE2ESuite(n = 20) {
   const games = [];
+  // v0.4.2: track Bell partner-disagree rate across the whole suite. We use
+  // chshTally.gameplayDiffs (gameplay-only) to avoid background-loop contamination.
+  let totalGameplayTrials = 0;
+  let totalGameplayDiffs = 0;
   for (let i = 0; i < n; i++) {
+    // Snapshot gameplay-only counters before the game so we attribute deltas
+    // accumulated during THIS game only.
+    const prevGameplayTrials = chshTally.gameplayTrials;
+    const prevGameplayDiffs = chshTally.gameplayDiffs;
     const { startExitRow, gameOver: sealed, exitOpenedRow: opened } = await autoPlayOneGame();
     const counts = countState();
     const reach = reachableFromStart();
@@ -119,6 +127,10 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
     const exitMatchesPick = (opened === null) || (opened === startExitRow);
     // Invariant 3: no SUPERPOSED walls between visited cells (loop prev).
     // (Skipped: would require iterating all wall IDs; we check totals.)
+    const gameplayTrialsDelta = chshTally.gameplayTrials - prevGameplayTrials;
+    const diffDelta = chshTally.gameplayDiffs - prevGameplayDiffs;
+    totalGameplayTrials += gameplayTrialsDelta;
+    totalGameplayDiffs += diffDelta;
     games.push({
       i, exitRow: startExitRow, sealed, exitOpened: opened !== null,
       openExits, exitMatchesPick,
@@ -126,6 +138,7 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
       superp: counts.superp, entangled: counts.entangled,
       reachableFromStart: reach.size,
       exitReachable: reach.has(`${startExitRow},${GRID - 1}`),
+      gameplayTrials: gameplayTrialsDelta, diff: diffDelta,
     });
   }
   // Aggregate
@@ -133,6 +146,22 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
   const wonCount = games.filter(g => g.exitOpened).length;
   const avgVisited = games.reduce((s, g) => s + g.visited, 0) / n;
   const exitRowsUsed = new Set(games.map(g => g.exitRow));
+  // v0.4.2: partner-disagree rate check. Skip if too few gameplay trials.
+  let disagreeAssertion;
+  if (totalGameplayTrials < 20) {
+    disagreeAssertion = {
+      name: 'partner_disagree_rate_in_bounds',
+      pass: true,
+      actual: `only ${totalGameplayTrials} gameplay trials, skipping`,
+    };
+  } else {
+    const rate = totalGameplayDiffs / totalGameplayTrials;
+    disagreeAssertion = {
+      name: 'partner_disagree_rate_in_bounds',
+      pass: rate >= 0.10 && rate <= 0.60,
+      actual: `disagree rate = ${rate.toFixed(2)} over ${totalGameplayTrials} gameplay trials`,
+    };
+  }
   // Spec acceptance criteria:
   const assertions = [
     { name: 'orphan_rate_le_25pct', pass: sealedCount / n <= 0.25, actual: `${sealedCount}/${n}` },
@@ -140,10 +169,12 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
     { name: 'exit_always_matches_pick', pass: games.every(g => g.exitMatchesPick), actual: '' },
     { name: 'at_most_one_exit_open', pass: games.every(g => g.openExits.length <= 1), actual: '' },
     { name: 'won_games_exit_reachable', pass: games.filter(g => g.exitOpened).every(g => g.exitReachable), actual: '' },
+    disagreeAssertion,
   ];
   return {
     n, sealedCount, wonCount, avgVisited,
     exitRowsUsed: [...exitRowsUsed].sort((a, b) => a - b),
+    totalGameplayTrials, totalGameplayDiffs,
     assertions,
     allPass: assertions.every(a => a.pass),
     games,

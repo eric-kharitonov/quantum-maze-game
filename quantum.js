@@ -15,8 +15,15 @@ async function wState(cell, candidates) {
   return data.chosen;
 }
 
-async function bell(cell, partner) {
-  const data = await postCollapse({ cell, candidates: [], type: 'bell', partner });
+async function bell(cell, partner, aliceAngleDeg = 0, bobAngleDeg = 0) {
+  const data = await postCollapse({
+    cell,
+    candidates: [],
+    type: 'bell',
+    partner,
+    alice_angle_deg: aliceAngleDeg,
+    bob_angle_deg: bobAngleDeg,
+  });
   return { a: data.a, b: data.b };
 }
 

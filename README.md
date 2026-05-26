@@ -5,8 +5,8 @@ A browser-based maze game where the maze doesn't exist until you observe it. Eve
 ## What's in the game
 
 - **Per-wall non-zero superposition.** When you enter a new cell, the surrounding candidate walls go into a single entangled state `|ψ⟩ = (1/√(2^k − 1)) Σ_{x ≠ 0} |x⟩` and are measured together. The state is prepared directly via `qc.initialize` — the all-`SOLID` outcome has amplitude *exactly* 0 by unitary construction, not by post-selection. Quantum mechanics, not a classical fix-up.
-- **Bell-state entanglement.** ~10% of walls are paired at game start under structural constraints (at most one Bell wall per cell, none adjacent to start or exit). When you observe one, its distant partner collapses simultaneously to the same outcome. Pre-collapse, dashed purple threads on the minimap show *exactly which walls are linked*.
-- **CHSH self-test panel.** Below the minimap, an independent stream of Bell measurements at varied angles accumulates the CHSH statistic `S` in the background. Once `S > 2.0` it lights up "Non-locality confirmed" — your game is *proving* its quantum claim live, not just asserting it.
+- **Bell-state entanglement at varied bases.** ~10% of walls are paired at game start under structural constraints. When you observe one, the server picks random CHSH measurement angles per side and runs a fresh Bell measurement. Partners are correlated, but at different angle pairs they sometimes disagree — and the pattern of agreements is what no classical model can reproduce. The maze itself is now what proves non-locality.
+- **CHSH self-test panel (gameplay-driven).** The maze's own Bell observations feed a running CHSH statistic `S`. Background trials top it up between moves. Once `S > 2.0` the panel reads "Non-locality confirmed" — and a growing share of those data points came from your own movements.
 - **Amplitude-bar overlay.** When the non-zero circuit fires, a small panel briefly shows `P(open)` for each candidate wall before they collapse to OPEN (cyan) or SOLID (grey). The wavefunction is visible for the moment before it isn't.
 - **Honest seal-offs.** If a Bell collapse orphans the exit cell, the game ends with `★ Quantum entanglement sealed this maze.` No classical override patches it up. Restart for a fresh quantum dice roll.
 
@@ -75,6 +75,7 @@ console.log(await runE2ESuite(20));
 | **v0.3** | Replace W-state with per-wall non-zero superposition entangled circuit. Remove **all** classical override — wall states are now genuinely irreversible. Add minimap click-to-teleport. |
 | **v0.4** | CHSH self-test panel + Bell partner threads on minimap + amplitude bars during measurement. |
 | **v0.4.1** | State-prep honesty: prepare the non-zero state directly via `qc.initialize` instead of Hadamards + classical post-selection. The all-zero amplitude is now exactly 0 by construction. |
+| **v0.4.2** | Bell-in-the-maze: gameplay Bell observations use varied CHSH angles, feeding the same S tally the side panel uses. Partners can disagree; mismatches render as a split cyan/amber flash. The maze itself now demonstrates non-locality, not just the side panel. |
 
 Specs and plans live in [`docs/superpowers/`](docs/superpowers/). Architecture notes in [`CLAUDE.md`](CLAUDE.md).
 
