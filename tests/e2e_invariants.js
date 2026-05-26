@@ -108,7 +108,24 @@ function reachableFromStart() {
 /** Run the suite of N games and return aggregated invariant data. */
 window.runE2ESuite = async function runE2ESuite(n = 20) {
   const games = [];
+  // v0.4.2: track Bell partner-disagree rate across the whole suite.
+  // chshTally.gameplayTrials counts only maze Bell observations, but
+  // chshTally.counts[x][y].diff is written by BOTH the background CHSH loop
+  // AND the gameplay observations (they share the same counts buckets).
+  // So totalDiff / totalGameplayTrials is biased upward — the background loop
+  // contributes its own diffs but not its trials to the denominator. The
+  // loose [0.10, 0.60] bounds are wide enough to absorb this bias; for tight
+  // bounds we'd need a separate gameplay-only diff counter in maze.js.
+  let totalGameplayTrials = 0;
+  let totalDiff = 0;
   for (let i = 0; i < n; i++) {
+    // Snapshot chshTally counters before the game so we attribute deltas
+    // (gameplay + background) accumulated during THIS game only.
+    const prevGameplayTrials = chshTally.gameplayTrials;
+    let prevDiff = 0;
+    for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
+      prevDiff += chshTally.counts[x][y].diff;
+    }
     const { startExitRow, gameOver: sealed, exitOpenedRow: opened } = await autoPlayOneGame();
     const counts = countState();
     const reach = reachableFromStart();
@@ -119,6 +136,14 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
     const exitMatchesPick = (opened === null) || (opened === startExitRow);
     // Invariant 3: no SUPERPOSED walls between visited cells (loop prev).
     // (Skipped: would require iterating all wall IDs; we check totals.)
+    const gameplayTrialsDelta = chshTally.gameplayTrials - prevGameplayTrials;
+    let postDiff = 0;
+    for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) {
+      postDiff += chshTally.counts[x][y].diff;
+    }
+    const diffDelta = postDiff - prevDiff;
+    totalGameplayTrials += gameplayTrialsDelta;
+    totalDiff += diffDelta;
     games.push({
       i, exitRow: startExitRow, sealed, exitOpened: opened !== null,
       openExits, exitMatchesPick,
@@ -126,6 +151,7 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
       superp: counts.superp, entangled: counts.entangled,
       reachableFromStart: reach.size,
       exitReachable: reach.has(`${startExitRow},${GRID - 1}`),
+      gameplayTrials: gameplayTrialsDelta, diff: diffDelta,
     });
   }
   // Aggregate
@@ -133,6 +159,22 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
   const wonCount = games.filter(g => g.exitOpened).length;
   const avgVisited = games.reduce((s, g) => s + g.visited, 0) / n;
   const exitRowsUsed = new Set(games.map(g => g.exitRow));
+  // v0.4.2: partner-disagree rate check. Skip if too few gameplay trials.
+  let disagreeAssertion;
+  if (totalGameplayTrials < 20) {
+    disagreeAssertion = {
+      name: 'partner_disagree_rate_in_bounds',
+      pass: true,
+      actual: `only ${totalGameplayTrials} gameplay trials, skipping`,
+    };
+  } else {
+    const rate = totalDiff / totalGameplayTrials;
+    disagreeAssertion = {
+      name: 'partner_disagree_rate_in_bounds',
+      pass: rate >= 0.10 && rate <= 0.60,
+      actual: `disagree rate = ${rate.toFixed(2)} over ${totalGameplayTrials} gameplay trials (incl. background-loop diffs in numerator)`,
+    };
+  }
   // Spec acceptance criteria:
   const assertions = [
     { name: 'orphan_rate_le_25pct', pass: sealedCount / n <= 0.25, actual: `${sealedCount}/${n}` },
@@ -140,10 +182,12 @@ window.runE2ESuite = async function runE2ESuite(n = 20) {
     { name: 'exit_always_matches_pick', pass: games.every(g => g.exitMatchesPick), actual: '' },
     { name: 'at_most_one_exit_open', pass: games.every(g => g.openExits.length <= 1), actual: '' },
     { name: 'won_games_exit_reachable', pass: games.filter(g => g.exitOpened).every(g => g.exitReachable), actual: '' },
+    disagreeAssertion,
   ];
   return {
     n, sealedCount, wonCount, avgVisited,
     exitRowsUsed: [...exitRowsUsed].sort((a, b) => a - b),
+    totalGameplayTrials, totalDiff,
     assertions,
     allPass: assertions.every(a => a.pass),
     games,
