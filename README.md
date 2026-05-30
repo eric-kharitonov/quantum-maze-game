@@ -1,5 +1,8 @@
 # Quantum Maze
 
+**▶ Play it live: https://quantum-maze-game.onrender.com**
+*(free-tier host — first visit after a quiet period takes ~30 s to wake up)*
+
 A browser-based maze game where the maze doesn't exist until you observe it. Every wall is a qubit in superposition. Your movement collapses quantum states one measurement at a time, using real quantum circuits running on Qiskit's `AerSimulator`.
 
 ## What's in the game
@@ -27,17 +30,14 @@ python -m venv .venv
 # source .venv/bin/activate       # macOS/Linux
 pip install -r requirements.txt
 
-# 2. Start the Qiskit backend (port 5000)
+# 2. Start the Flask+Qiskit server (serves both the API and the frontend)
 python server.py
 
-# 3. In another terminal, serve the frontend statically (port 8765)
-python -m http.server 8765
-
-# 4. Open the game in your browser
-#    http://localhost:8765/index.html
+# 3. Open the game in your browser
+#    http://localhost:5000
 ```
 
-The backend logs each `POST /collapse` request — you can watch real quantum circuits being measured as you play.
+The server logs each `POST /collapse` request — you can watch real quantum circuits being measured as you play.
 
 ## Controls
 
