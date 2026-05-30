@@ -1,4 +1,7 @@
-const SERVER = 'http://localhost:5000';
+// Empty SERVER => relative URL, served from the same origin as the page.
+// Local dev works when you serve index.html from server.py (visit
+// http://localhost:5000) instead of via `python -m http.server`.
+const SERVER = '';
 
 async function postCollapse(body) {
   const res = await fetch(`${SERVER}/collapse`, {
